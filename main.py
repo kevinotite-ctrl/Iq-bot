@@ -1,9 +1,8 @@
 import os, time, threading, random, datetime
 from flask import Flask
 import telebot
-import numpy as np
 
-print("=== KEVIN BOT V12 SAFE TREND ===", flush=True)
+print("=== KEVIN BOT V12.1 SAFE NO-NUMPY ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -28,15 +27,24 @@ def get_pairs():
 def get_rsi(candles, period=14):
     try:
         closes = [c['close'] for c in candles]
-        deltas = np.diff(closes)
-        gains = np.where(deltas>0, deltas, 0)
-        losses = np.where(deltas<0, -deltas, 0)
-        avg_gain = np.mean(gains[-period:])
-        avg_loss = np.mean(losses[-period:])
+        gains = []
+        losses = []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i-1]
+            if diff > 0:
+                gains.append(diff)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(-diff)
+        if len(gains) < period:
+            return 50
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
         if avg_loss == 0:
             return 70
         rs = avg_gain / avg_loss
-        rsi = 100 - (100/(1+rs))
+        rsi = 100 - (100 / (1 + rs))
         return rsi
     except:
         return 50
@@ -44,17 +52,18 @@ def get_rsi(candles, period=14):
 def get_ema(candles, period):
     try:
         closes = [c['close'] for c in candles]
+        if not closes:
+            return 0
         ema = closes[0]
         k = 2/(period+1)
         for price in closes[1:]:
             ema = price * k + ema * (1-k)
         return ema
     except:
-        return closes[-1] if candles else 0
+        return 0
 
 def analyze(pair):
     try:
-        # Get last 50 candles 1 min
         candles = Iq.get_candles(pair, 60, 50, time.time())
         if not candles or len(candles) < 25:
             return None, "No candles"
@@ -63,7 +72,6 @@ def analyze(pair):
         rsi = get_rsi(candles, 14)
         close = candles[-1]['close']
 
-        # TREND LOGIC
         if close > ema7 > ema21 and rsi > 55 and rsi < 75:
             return "call", f"UPTREND EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
         elif close < ema7 < ema21 and rsi < 45 and rsi > 25:
@@ -87,7 +95,7 @@ except Exception as e:
 @app.route('/')
 def home():
     bal = Iq.get_balance() if Iq else "NO IQ"
-    return f"V12 SAFE TREND BAL {bal} AMT {current_amount}"
+    return f"V12.1 SAFE BAL {bal}"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -98,11 +106,7 @@ def start(m):
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
     bal = Iq.get_balance() if Iq else "?"
-    bot.send_message(m.chat.id, f"🤖 V12 SAFE TREND ACTIVE\nBal ${bal}\nStrategy: EMA7/21 + RSI\nNo martingale - flat ${BASE_AMOUNT}\nSkip if no trend\n/resume /pause /balance /pairs")
-
-@bot.message_handler(commands=['pairs'])
-def show_pairs(m):
-    bot.send_message(m.chat.id, f"Pairs now: {', '.join(get_pairs())}")
+    bot.send_message(m.chat.id, f"🤖 V12.1 SAFE ACTIVE\nBal ${bal}\nEMA+RSI only\nFlat $10\n/resume /pause /balance")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -111,7 +115,7 @@ def resume(m):
     SCANNING = True
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
-    bot.send_message(m.chat.id, "▶️ V12 SAFE RESUMED - Now only trades STRONG trends. May skip some cycles if market choppy.")
+    bot.send_message(m.chat.id, "▶️ V12.1 RESUMED - Strong trends only, skips choppy.")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -119,12 +123,12 @@ def pause(m):
     SCANNING = False
     bot.send_message(m.chat.id, "⏸️ Paused")
 
-@bot.message_handler(commands=['balance','status'])
+@bot.message_handler(commands=['balance','status','pairs'])
 def status(m):
     global OWNER_ID
     OWNER_ID = m.chat.id
     b = Iq.get_balance() if Iq else "?"
-    bot.send_message(m.chat.id, f"BAL ${b} Amt ${current_amount} Flat mode")
+    bot.send_message(m.chat.id, f"BAL ${b} Pairs: {', '.join(get_pairs())} Amt ${current_amount}")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
@@ -133,43 +137,38 @@ def scan(m):
     do_trade()
 
 def do_trade():
-    global current_amount, LAST_SIGNAL
+    global LAST_SIGNAL
     if not Iq or not OWNER_ID:
         return
     PAIRS = get_pairs()
     random.shuffle(PAIRS)
-
     found = False
     for pair in PAIRS:
         direction, reason = analyze(pair)
         print(f"ANALYZE {pair} -> {direction} | {reason}", flush=True)
         if direction:
             found = True
-            if OWNER_ID:
-                bot.send_message(OWNER_ID, f"📊 STRONG SIGNAL {pair}\n{reason}\nBuying {direction.upper()} ${current_amount}")
             try:
+                bot.send_message(OWNER_ID, f"📊 SIGNAL {pair} {direction.upper()} ${current_amount}\n{reason}")
                 status, trade_id = Iq.buy(current_amount, pair, direction, 1)
                 if not status:
                     continue
-                if OWNER_ID:
-                    bot.send_message(OWNER_ID, f"✅ BOUGHT {pair} {direction.upper()} ${current_amount}\nID {trade_id}\nWait 65s...")
+                bot.send_message(OWNER_ID, f"✅ BOUGHT {pair} {direction.upper()} ${current_amount}\nID {trade_id} Wait 65s...")
                 time.sleep(65)
                 profit = Iq.check_win_v3(trade_id)
                 bal = Iq.get_balance()
                 LAST_SIGNAL = time.time()
                 if profit and profit > 0:
-                    bot.send_message(OWNER_ID, f"💰 WIN +${round(profit,2)} | {reason}\nBal ${round(bal,2)}\nNext in 3 mins")
+                    bot.send_message(OWNER_ID, f"💰 WIN +${round(profit,2)}\n{reason}\nBal ${round(bal,2)}")
                 else:
-                    bot.send_message(OWNER_ID, f"📉 LOSS -${current_amount} | {reason}\nBal ${round(bal,2)}\nFlat ${BASE_AMOUNT} - No double\nNext in 3 mins")
+                    bot.send_message(OWNER_ID, f"📉 LOSS -${current_amount}\n{reason}\nBal ${round(bal,2)} Flat no double")
                 return
             except Exception as e:
                 print(f"BUY ERR {e}", flush=True)
                 continue
-
-    # No trend found
     LAST_SIGNAL = time.time()
-    if OWNER_ID and not found:
-        bot.send_message(OWNER_ID, f"⏭️ No strong trend found in {', '.join(PAIRS)} - Skipping this round. Will check again in 3 mins. Bal ${round(Iq.get_balance(),2)}")
+    if not found and OWNER_ID:
+        bot.send_message(OWNER_ID, f"⏭️ No trend - Skip. Bal ${round(Iq.get_balance(),2)} Next 3 mins")
 
 def scanner():
     while True:
