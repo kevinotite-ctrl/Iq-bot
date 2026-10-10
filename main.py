@@ -1,8 +1,9 @@
 import os, time, threading, random, datetime
 from flask import Flask
 import telebot
+import numpy as np
 
-print("=== KEVIN BOT V11 WEEKDAY AUTO ===", flush=True)
+print("=== KEVIN BOT V12 SAFE TREND ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -11,7 +12,6 @@ PASS = os.getenv("IQ_PASSWORD")
 
 BASE_AMOUNT = 10
 current_amount = BASE_AMOUNT
-martingale_level = 0
 OWNER_ID = None
 Iq = None
 SCANNING = True
@@ -22,28 +22,72 @@ WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC"]
 WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC"]
 
 def get_pairs():
-    wd = datetime.datetime.now().weekday() # 0=Mon 5=Sat 6=Sun
-    if wd >= 5:
-        return WEEKEND_PAIRS
-    else:
-        return WEEKDAY_PAIRS
+    wd = datetime.datetime.now().weekday()
+    return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
+
+def get_rsi(candles, period=14):
+    try:
+        closes = [c['close'] for c in candles]
+        deltas = np.diff(closes)
+        gains = np.where(deltas>0, deltas, 0)
+        losses = np.where(deltas<0, -deltas, 0)
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        if avg_loss == 0:
+            return 70
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100/(1+rs))
+        return rsi
+    except:
+        return 50
+
+def get_ema(candles, period):
+    try:
+        closes = [c['close'] for c in candles]
+        ema = closes[0]
+        k = 2/(period+1)
+        for price in closes[1:]:
+            ema = price * k + ema * (1-k)
+        return ema
+    except:
+        return closes[-1] if candles else 0
+
+def analyze(pair):
+    try:
+        # Get last 50 candles 1 min
+        candles = Iq.get_candles(pair, 60, 50, time.time())
+        if not candles or len(candles) < 25:
+            return None, "No candles"
+        ema7 = get_ema(candles[-15:], 7)
+        ema21 = get_ema(candles, 21)
+        rsi = get_rsi(candles, 14)
+        close = candles[-1]['close']
+
+        # TREND LOGIC
+        if close > ema7 > ema21 and rsi > 55 and rsi < 75:
+            return "call", f"UPTREND EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
+        elif close < ema7 < ema21 and rsi < 45 and rsi > 25:
+            return "put", f"DOWNTREND EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
+        else:
+            return None, f"NO TREND close {close} EMA7 {round(ema7,5)} EMA21 {round(ema21,5)} RSI {round(rsi,1)} -> SKIP"
+    except Exception as e:
+        return None, f"Analyze err {e}"
 
 try:
     from iqoptionapi.stable_api import IQ_Option
     Iq = IQ_Option(EMAIL, PASS)
     check, reason = Iq.connect()
-    print(f"IQ CONNECT: {check} | {reason}", flush=True)
+    print(f"IQ CONNECT {check} {reason}", flush=True)
     if check:
         Iq.change_balance("PRACTICE")
-        print(f"BAL: ${Iq.get_balance()}", flush=True)
+        print(f"BAL {Iq.get_balance()}", flush=True)
 except Exception as e:
     print(f"IQ ERR {e}", flush=True)
 
 @app.route('/')
 def home():
     bal = Iq.get_balance() if Iq else "NO IQ"
-    pairs = get_pairs()
-    return f"V11 AUTO - BAL {bal} - PAIRS {len(pairs)} - {pairs}"
+    return f"V12 SAFE TREND BAL {bal} AMT {current_amount}"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -53,16 +97,12 @@ def start(m):
     OWNER_ID = m.chat.id
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
-    pairs = get_pairs()
     bal = Iq.get_balance() if Iq else "?"
-    day = "WEEKEND" if datetime.datetime.now().weekday() >=5 else "WEEKDAY"
-    bot.send_message(m.chat.id, f"🤖 V11 AUTO SWITCH\nMode: {day}\nPairs: {', '.join(pairs)}\nBal: ${bal}\nAmt: ${current_amount}\n\nAuto every 3 mins\n/resume - start\n/pause - stop\n/balance - check\n/pairs - see pairs")
+    bot.send_message(m.chat.id, f"🤖 V12 SAFE TREND ACTIVE\nBal ${bal}\nStrategy: EMA7/21 + RSI\nNo martingale - flat ${BASE_AMOUNT}\nSkip if no trend\n/resume /pause /balance /pairs")
 
 @bot.message_handler(commands=['pairs'])
 def show_pairs(m):
-    pairs = get_pairs()
-    day = "WEEKEND (2 pairs)" if datetime.datetime.now().weekday() >=5 else "WEEKDAY (7 pairs)"
-    bot.send_message(m.chat.id, f"📅 {day}\n{', '.join(pairs)}")
+    bot.send_message(m.chat.id, f"Pairs now: {', '.join(get_pairs())}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -71,9 +111,7 @@ def resume(m):
     SCANNING = True
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
-    pairs = get_pairs()
-    print(f"RESUME V11 {OWNER_ID} pairs:{pairs}", flush=True)
-    bot.send_message(m.chat.id, f"▶️ RESUMED - {len(pairs)} pairs active: {', '.join(pairs)}\nFirst in 2 mins, then every 3 mins.")
+    bot.send_message(m.chat.id, "▶️ V12 SAFE RESUMED - Now only trades STRONG trends. May skip some cycles if market choppy.")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -86,97 +124,63 @@ def status(m):
     global OWNER_ID
     OWNER_ID = m.chat.id
     b = Iq.get_balance() if Iq else "?"
-    left = int((RESUME_AT + 120 - time.time()) if LAST_SIGNAL==0 else (LAST_SIGNAL + 180 - time.time()))
-    if left < 0: left = 0
-    bot.send_message(m.chat.id, f"BAL ${b} | Next in {left}s | Amt ${current_amount} | Lvl {martingale_level}")
+    bot.send_message(m.chat.id, f"BAL ${b} Amt ${current_amount} Flat mode")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
     global OWNER_ID
     OWNER_ID = m.chat.id
-    bot.send_message(m.chat.id, "🔍 Force trade now...")
     do_trade()
 
 def do_trade():
-    global current_amount, martingale_level, LAST_SIGNAL
-    if not Iq:
-        if OWNER_ID:
-            bot.send_message(OWNER_ID, "❌ IQ NOT CONNECTED")
+    global current_amount, LAST_SIGNAL
+    if not Iq or not OWNER_ID:
         return
     PAIRS = get_pairs()
-    pair = random.choice(PAIRS)
-    direction = random.choice(["call","put"])
-    if OWNER_ID:
-        bot.send_message(OWNER_ID, f"📊 SIGNAL {pair} {direction.upper()} ${current_amount}\nAuto buying...")
+    random.shuffle(PAIRS)
 
-    bought = False
-    bought_pair = pair
-    bought_id = None
-
-    for attempt_pair in [pair] + PAIRS:
-        try:
-            print(f"TRY BUY {attempt_pair} {direction} ${current_amount}", flush=True)
-            status, trade_id = Iq.buy(current_amount, attempt_pair, direction, 1)
-            print(f"BUY RESULT {attempt_pair} -> {status} {trade_id}", flush=True)
-            if status:
-                bought = True
-                bought_pair = attempt_pair
-                bought_id = trade_id
-                break
-        except Exception as e:
-            print(f"BUY ERR {e}", flush=True)
-            continue
-
-    if not bought:
-        if OWNER_ID:
-            bot.send_message(OWNER_ID, f"❌ All {len(PAIRS)} pairs failed. Retry in 3 mins. Bal ${round(Iq.get_balance(),2)}")
-        LAST_SIGNAL = time.time()
-        return
-
-    if OWNER_ID:
-        bot.send_message(OWNER_ID, f"✅ AUTO BOUGHT {bought_pair} {direction.upper()} ${current_amount}\nID {bought_id}\nWaiting 65s...")
-
-    time.sleep(65)
-    try:
-        profit = Iq.check_win_v3(bought_id)
-        bal = Iq.get_balance()
-        LAST_SIGNAL = time.time()
-        print(f"RESULT profit={profit} bal={bal}", flush=True)
-        if profit and profit > 0:
+    found = False
+    for pair in PAIRS:
+        direction, reason = analyze(pair)
+        print(f"ANALYZE {pair} -> {direction} | {reason}", flush=True)
+        if direction:
+            found = True
             if OWNER_ID:
-                bot.send_message(OWNER_ID, f"💰 WIN +${round(profit,2)}\nBal: ${round(bal,2)}\nReset to ${BASE_AMOUNT}\nNext in 3 mins")
-            current_amount = BASE_AMOUNT
-            martingale_level = 0
-        else:
-            martingale_level += 1
-            loss = current_amount
-            current_amount *= 2
-            if current_amount > 160:
-                current_amount = BASE_AMOUNT
-                martingale_level = 0
+                bot.send_message(OWNER_ID, f"📊 STRONG SIGNAL {pair}\n{reason}\nBuying {direction.upper()} ${current_amount}")
+            try:
+                status, trade_id = Iq.buy(current_amount, pair, direction, 1)
+                if not status:
+                    continue
                 if OWNER_ID:
-                    bot.send_message(OWNER_ID, f"📉 LOSS -${loss}\nBal: ${round(bal,2)}\nReset to ${BASE_AMOUNT}\nNext in 3 mins")
-            else:
-                if OWNER_ID:
-                    bot.send_message(OWNER_ID, f"📉 LOSS -${loss}\nNext: ${current_amount} Lvl {martingale_level}\nBal: ${round(bal,2)}\nNext in 3 mins")
-    except Exception as e:
-        print(f"RESULT ERR {e}", flush=True)
-        if OWNER_ID:
-            bot.send_message(OWNER_ID, f"⚠️ Result error {e}\nBal ${round(Iq.get_balance(),2)}")
-        LAST_SIGNAL = time.time()
+                    bot.send_message(OWNER_ID, f"✅ BOUGHT {pair} {direction.upper()} ${current_amount}\nID {trade_id}\nWait 65s...")
+                time.sleep(65)
+                profit = Iq.check_win_v3(trade_id)
+                bal = Iq.get_balance()
+                LAST_SIGNAL = time.time()
+                if profit and profit > 0:
+                    bot.send_message(OWNER_ID, f"💰 WIN +${round(profit,2)} | {reason}\nBal ${round(bal,2)}\nNext in 3 mins")
+                else:
+                    bot.send_message(OWNER_ID, f"📉 LOSS -${current_amount} | {reason}\nBal ${round(bal,2)}\nFlat ${BASE_AMOUNT} - No double\nNext in 3 mins")
+                return
+            except Exception as e:
+                print(f"BUY ERR {e}", flush=True)
+                continue
+
+    # No trend found
+    LAST_SIGNAL = time.time()
+    if OWNER_ID and not found:
+        bot.send_message(OWNER_ID, f"⏭️ No strong trend found in {', '.join(PAIRS)} - Skipping this round. Will check again in 3 mins. Bal ${round(Iq.get_balance(),2)}")
 
 def scanner():
-    print("SCANNER V11 STARTED", flush=True)
     while True:
         try:
             time.sleep(10)
             if not OWNER_ID or not SCANNING:
                 continue
             now = time.time()
-            need = 120 if LAST_SIGNAL == 0 else 180
-            last = RESUME_AT if LAST_SIGNAL == 0 else LAST_SIGNAL
-            diff = now - last
-            if diff < need:
+            need = 120 if LAST_SIGNAL==0 else 180
+            last = RESUME_AT if LAST_SIGNAL==0 else LAST_SIGNAL
+            if now - last < need:
                 continue
             do_trade()
         except Exception as e:
