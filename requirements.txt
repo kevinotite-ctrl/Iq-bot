@@ -1,6 +1,5 @@
 python-telegram-bot==20.7
-iqoptionapi
+iqoptionapi==5.2.1
 Flask==3.0.0
 requests
 websocket-client==1.6.4
-python-socks
