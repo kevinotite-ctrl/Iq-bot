@@ -3,7 +3,7 @@ from flask import Flask
 import telebot
 from telebot import types
 
-print("=== KEVIN BOT V9.7 HEARTBEAT ===", flush=True)
+print("=== KEVIN BOT V9.8 FIXED ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -32,8 +32,7 @@ except Exception as e:
 
 @app.route('/')
 def home():
-    bal = Iq.get_balance() if Iq else "NO IQ"
-    return f"V9.7 LIVE - BAL {bal} - AMT {current_amount}"
+    return f"V9.8 LIVE BAL {Iq.get_balance() if Iq else 'NO IQ'}"
 
 bot = telebot.TeleBot(TOKEN)
 PAIRS = ["EURUSD-OTC", "EURUSD", "GBPUSD-OTC", "GBPUSD"]
@@ -45,8 +44,7 @@ def start(m):
     OWNER_ID = m.chat.id
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
-    bal = Iq.get_balance() if Iq else "?"
-    bot.send_message(m.chat.id, f"🔥 V9.7 ACTIVE\nBal: ${bal}\n\n/resume - first in 2 mins then every 3 mins\n/scan - force now")
+    bot.send_message(m.chat.id, f"🔥 V9.8 FIXED ACTIVE\nBal: ${Iq.get_balance() if Iq else '?'}\n\n/resume = first in 2 mins then every 3 mins\n/scan = force now")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -55,8 +53,8 @@ def resume(m):
     SCANNING = True
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
-    print(f"RESUME called by {OWNER_ID} at {time.time()}", flush=True)
-    bot.send_message(m.chat.id, "▶️ Resumed - first signal in 2 mins - WATCH RENDER LOGS for HEARTBEAT")
+    print(f"RESUME {OWNER_ID} time {RESUME_AT}", flush=True)
+    bot.send_message(m.chat.id, "▶️ Resumed - first signal in 2 mins (guaranteed)")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -78,22 +76,25 @@ def handle(m):
         markup.add(types.InlineKeyboardButton(f"✅ EXECUTE {direction.upper()} ${current_amount}", callback_data=f"execute_{trade_id}"),
                    types.InlineKeyboardButton("⏭️ SKIP", callback_data=f"skip_{trade_id}"))
         bot.send_message(m.chat.id, f"📊 FORCED TEST\n{pair} {direction.upper()} ${current_amount}", reply_markup=markup)
-        print(f"MANUAL SIGNAL SENT {trade_id}", flush=True)
+        print(f"MANUAL SENT {trade_id}", flush=True)
     else:
         bal = Iq.get_balance() if Iq else "?"
-        left = int((RESUME_AT + 120 - time.time()) if LAST_SIGNAL==0 else (LAST_SIGNAL + 180 - time.time()))
-        if left<0: left=0
-        bot.send_message(m.chat.id, f"STATUS\nBal ${bal}\nNext in {left}s\nScanning {SCANNING}\nOwner {OWNER_ID}")
+        if LAST_SIGNAL == 0:
+            left = int((RESUME_AT + 120) - time.time())
+        else:
+            left = int((LAST_SIGNAL + 180) - time.time())
+        if left < 0: left = 0
+        bot.send_message(m.chat.id, f"STATUS\nBal ${bal}\nNext in {left}s\nScanning {SCANNING}\nOwner {OWNER_ID}\nAmount ${current_amount}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_buttons(call):
     global current_amount, martingale_level, LAST_SIGNAL
-    print(f"BUTTON CLICKED {call.data}", flush=True)
+    print(f"CLICK {call.data}", flush=True)
     try: bot.answer_callback_query(call.id, "Processing...")
     except: pass
     trade_id = call.data.replace("execute_","").replace("skip_","")
     if trade_id not in pending_trades:
-        bot.send_message(call.message.chat.id, "❌ Expired, /scan again")
+        bot.send_message(call.message.chat.id, "❌ Expired, /scan")
         return
     data = pending_trades[trade_id]
     if "skip" in call.data:
@@ -112,15 +113,15 @@ def handle_buttons(call):
         return
     try:
         status, id = Iq.buy(current_amount, pair, direction, 1)
-        print(f"BUY RESULT {status} {id}", flush=True)
+        print(f"BUY {status} {id}", flush=True)
         if not status:
-            bot.send_message(call.message.chat.id, f"❌ Trade failed: {id}")
+            bot.send_message(call.message.chat.id, f"❌ Failed: {id}")
             return
-        bot.send_message(call.message.chat.id, f"✅ EXECUTED {pair} {direction.upper()} ${current_amount}\nID {id}\nWaiting 65s for result...")
+        bot.send_message(call.message.chat.id, f"✅ EXECUTED {pair} {direction.upper()} ${current_amount}\nID {id}\nWaiting 65s...")
         time.sleep(65)
         profit = Iq.check_win_v3(id)
         LAST_SIGNAL = time.time()
-        print(f"WIN_CHECK {profit}", flush=True)
+        print(f"RESULT {profit}", flush=True)
         if profit > 0:
             bot.send_message(call.message.chat.id, f"💰 WIN +${round(profit,2)} Bal ${round(Iq.get_balance(),2)} Reset to ${BASE_AMOUNT}\nNext in 3 mins")
             current_amount = BASE_AMOUNT
@@ -136,26 +137,26 @@ def handle_buttons(call):
             else:
                 bot.send_message(call.message.chat.id, f"📉 LOSS -${loss} Next ${current_amount} Lvl {martingale_level} Bal ${round(Iq.get_balance(),2)} Next in 3 mins")
     except Exception as e:
-        print(f"EXEC ERROR {e}", flush=True)
+        print(f"EXEC ERR {e}", flush=True)
         bot.send_message(call.message.chat.id, f"❌ Error {e}")
     if trade_id in pending_trades:
         del pending_trades[trade_id]
 
 def scanner():
-    print("SCANNER THREAD STARTED", flush=True)
+    global LAST_SIGNAL
+    print("SCANNER THREAD STARTED - V9.8", flush=True)
     while True:
         try:
-            time.sleep(5)
+            time.sleep(10)
+            print(f"SCANNER ALIVE - Owner:{OWNER_ID} Scan:{SCANNING} Last:{int(LAST_SIGNAL)} Now:{int(time.time())}", flush=True)
             if not OWNER_ID or not SCANNING:
-                if int(time.time()) % 30 == 0:
-                    print(f"HEARTBEAT - Owner {OWNER_ID} Scanning {SCANNING}", flush=True)
+                print("WAITING FOR OWNER /resume", flush=True)
                 continue
             now = time.time()
             need = 120 if LAST_SIGNAL == 0 else 180
             last = RESUME_AT if LAST_SIGNAL == 0 else LAST_SIGNAL
             diff = now - last
-            if int(now) % 15 == 0:
-                print(f"TIMER CHECK - diff {int(diff)} need {need} owner {OWNER_ID}", flush=True)
+            print(f"CHECK diff={int(diff)} need={need} -> {'SEND!' if diff>=need else 'wait'}", flush=True)
             if diff < need:
                 continue
             pair = random.choice(PAIRS)
@@ -165,9 +166,14 @@ def scanner():
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(f"✅ EXECUTE {direction.upper()} ${current_amount}", callback_data=f"execute_{trade_id}"),
                        types.InlineKeyboardButton("⏭️ SKIP", callback_data=f"skip_{trade_id}"))
-            bot.send_message(OWNER_ID, f"📊 KEVIN SIGNAL\nPair: {pair}\nDir: {direction.upper()}\nAmt: ${current_amount}\n\nGuaranteed every 3 mins", reply_markup=markup)
-            LAST_SIGNAL = time.time()
-            print(f"AUTO SIGNAL SENT {trade_id} to {OWNER_ID}", flush=True)
+            # Use try to catch threading error
+            try:
+                bot.send_message(OWNER_ID, f"📊 KEVIN SIGNAL\nPair: {pair}\nDir: {direction.upper()}\nAmt: ${current_amount}\n\nGuaranteed every 3 mins", reply_markup=markup)
+                LAST_SIGNAL = time.time()
+                print(f"AUTO SIGNAL SENT {trade_id} to {OWNER_ID}", flush=True)
+            except Exception as e:
+                print(f"SEND FAILED {e}", flush=True)
+                import traceback; traceback.print_exc()
         except Exception as e:
             print(f"SCANNER ERROR {e}", flush=True)
             import traceback; traceback.print_exc()
