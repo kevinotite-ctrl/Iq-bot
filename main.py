@@ -9,17 +9,14 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 IQ_EMAIL = os.getenv("IQ_EMAIL")
 IQ_PASSWORD = os.getenv("IQ_PASSWORD")
 
-# Try both library versions
-try:
-    from iqoptionapi.stable_api import IQ_Option
-    iq = IQ_Option(IQ_EMAIL, IQ_PASSWORD)
-except:
-    from iqoptionapi.api import IQOptionAPI
-    iq = IQOptionAPI(IQ_EMAIL, IQ_PASSWORD)
+print(f"Checking env: Email set={bool(IQ_EMAIL)} Pass set={bool(IQ_PASSWORD)} Token set={bool(TOKEN)}")
 
+from iqoptionapi.api import IQOptionAPI
+iq = IQOptionAPI(IQ_EMAIL, IQ_PASSWORD)
 check, reason = iq.connect()
+print(f"Connected: {check} Reason: {reason}")
 iq.change_balance("PRACTICE")
-print(f"DEMO Connected: {check} Balance: ${iq.get_balance()}")
+print(f"DEMO Balance: ${iq.get_balance()}")
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.channel_post.text if update.channel_post else update.message.text
@@ -32,11 +29,8 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not direction: return
     print(f"Signal {pair} {direction}")
     try:
-        if hasattr(iq, 'buy'):
-            status, _id = iq.buy(1, pair, direction, 1)
-        else:
-            status, _id = iq.buy_digital_spot(pair, 1, direction, 1)
-        print(f"DEMO {pair} {direction} -> {status}")
+        status, _id = iq.buy_digital_spot(pair, 1, direction, 1)
+        print(f"TRADE {pair} {direction} -> {status}")
     except Exception as e:
         print(f"Trade error: {e}")
 
@@ -45,7 +39,7 @@ tg_app.add_handler(MessageHandler(filters.ALL, handle))
 
 @app.route('/')
 def home():
-    return "BOT LIVE - DEMO - ONE STRATEGY"
+    return "BOT LIVE - DEMO"
 
 if __name__ == '__main__':
     import threading
