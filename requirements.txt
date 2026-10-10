@@ -1,5 +1,4 @@
-python-telegram-bot==20.7
-Flask==3.0.0
-requests
-websocket-client==1.6.4
 git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
+python-telegram-bot
+Flask
+requests
