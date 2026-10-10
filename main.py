@@ -1,8 +1,8 @@
-import os, time, threading, random
+import os, time, threading, random, datetime
 from flask import Flask
 import telebot
 
-print("=== KEVIN BOT V10 FULL AUTO ===", flush=True)
+print("=== KEVIN BOT V11 WEEKDAY AUTO ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -18,6 +18,16 @@ SCANNING = True
 LAST_SIGNAL = 0
 RESUME_AT = time.time()
 
+WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC"]
+WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC"]
+
+def get_pairs():
+    wd = datetime.datetime.now().weekday() # 0=Mon 5=Sat 6=Sun
+    if wd >= 5:
+        return WEEKEND_PAIRS
+    else:
+        return WEEKDAY_PAIRS
+
 try:
     from iqoptionapi.stable_api import IQ_Option
     Iq = IQ_Option(EMAIL, PASS)
@@ -32,10 +42,10 @@ except Exception as e:
 @app.route('/')
 def home():
     bal = Iq.get_balance() if Iq else "NO IQ"
-    return f"V10 AUTO LIVE - BAL {bal} - AMT {current_amount}"
+    pairs = get_pairs()
+    return f"V11 AUTO - BAL {bal} - PAIRS {len(pairs)} - {pairs}"
 
 bot = telebot.TeleBot(TOKEN)
-PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "EURUSD", "GBPUSD"]
 
 @bot.message_handler(commands=['start'])
 def start(m):
@@ -43,8 +53,16 @@ def start(m):
     OWNER_ID = m.chat.id
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
+    pairs = get_pairs()
     bal = Iq.get_balance() if Iq else "?"
-    bot.send_message(m.chat.id, f"🤖 V10 FULL AUTO ACTIVE\nBal: ${bal}\nAmt: ${current_amount}\n\nBot trades BY ITSELF every 3 mins\n/resume - start\n/pause - stop\n/balance - check")
+    day = "WEEKEND" if datetime.datetime.now().weekday() >=5 else "WEEKDAY"
+    bot.send_message(m.chat.id, f"🤖 V11 AUTO SWITCH\nMode: {day}\nPairs: {', '.join(pairs)}\nBal: ${bal}\nAmt: ${current_amount}\n\nAuto every 3 mins\n/resume - start\n/pause - stop\n/balance - check\n/pairs - see pairs")
+
+@bot.message_handler(commands=['pairs'])
+def show_pairs(m):
+    pairs = get_pairs()
+    day = "WEEKEND (2 pairs)" if datetime.datetime.now().weekday() >=5 else "WEEKDAY (7 pairs)"
+    bot.send_message(m.chat.id, f"📅 {day}\n{', '.join(pairs)}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -53,8 +71,9 @@ def resume(m):
     SCANNING = True
     RESUME_AT = time.time()
     LAST_SIGNAL = 0
-    print(f"RESUME AUTO {OWNER_ID}", flush=True)
-    bot.send_message(m.chat.id, "▶️ AUTO RESUMED - First trade in 2 mins, then every 3 mins. No tap needed.")
+    pairs = get_pairs()
+    print(f"RESUME V11 {OWNER_ID} pairs:{pairs}", flush=True)
+    bot.send_message(m.chat.id, f"▶️ RESUMED - {len(pairs)} pairs active: {', '.join(pairs)}\nFirst in 2 mins, then every 3 mins.")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -84,6 +103,7 @@ def do_trade():
         if OWNER_ID:
             bot.send_message(OWNER_ID, "❌ IQ NOT CONNECTED")
         return
+    PAIRS = get_pairs()
     pair = random.choice(PAIRS)
     direction = random.choice(["call","put"])
     if OWNER_ID:
@@ -103,20 +123,13 @@ def do_trade():
                 bought_pair = attempt_pair
                 bought_id = trade_id
                 break
-            else:
-                if "closed" in str(trade_id).lower() or "not open" in str(trade_id).lower():
-                    continue
-                else:
-                    if OWNER_ID:
-                        bot.send_message(OWNER_ID, f"❌ Failed {attempt_pair}: {trade_id}")
-                    break
         except Exception as e:
             print(f"BUY ERR {e}", flush=True)
             continue
 
     if not bought:
         if OWNER_ID:
-            bot.send_message(OWNER_ID, f"❌ All pairs failed. Retry in 3 mins. Bal ${round(Iq.get_balance(),2)}")
+            bot.send_message(OWNER_ID, f"❌ All {len(PAIRS)} pairs failed. Retry in 3 mins. Bal ${round(Iq.get_balance(),2)}")
         LAST_SIGNAL = time.time()
         return
 
@@ -153,24 +166,21 @@ def do_trade():
         LAST_SIGNAL = time.time()
 
 def scanner():
-    print("SCANNER AUTO STARTED V10", flush=True)
+    print("SCANNER V11 STARTED", flush=True)
     while True:
         try:
             time.sleep(10)
-            print(f"ALIVE Owner:{OWNER_ID} Scan:{SCANNING} Last:{int(LAST_SIGNAL)}", flush=True)
             if not OWNER_ID or not SCANNING:
                 continue
             now = time.time()
             need = 120 if LAST_SIGNAL == 0 else 180
             last = RESUME_AT if LAST_SIGNAL == 0 else LAST_SIGNAL
             diff = now - last
-            print(f"CHECK diff={int(diff)} need={need} -> {'TRADE!' if diff>=need else 'wait'}", flush=True)
             if diff < need:
                 continue
             do_trade()
         except Exception as e:
             print(f"SCANNER ERR {e}", flush=True)
-            import traceback; traceback.print_exc()
             time.sleep(5)
 
 threading.Thread(target=scanner, daemon=True).start()
