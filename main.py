@@ -1,13 +1,13 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V17.0 CHANNEL -1003709183793 ===", flush=True)
+print("=== V17.1 REAL SIGNAL TO CHANNEL +10SEC ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
 
-CHANNEL_ID = -1003709183793 # YOUR CHANNEL
+CHANNEL_ID = -1003709183793
 
 BASE_AMOUNT = 10000
 MARTINGALE_AMOUNTS = [10000, 15000, 20000]
@@ -64,15 +64,28 @@ def get_countdown():
     s = remaining % 60
     return f"{m:02d}:{s:02d}", remaining
 
-def send_all(text):
+def send_private(text):
     try:
         if OWNER_ID:
             bot.send_message(OWNER_ID, text)
     except: pass
+
+def send_channel(text):
     try:
         bot.send_message(CHANNEL_ID, text)
     except Exception as e:
         print(f"CHANNEL FAIL {e}", flush=True)
+
+def send_signal_with_delay(private_text, channel_text=None):
+    # Send to you immediately
+    send_private(private_text)
+    # Send to channel after 10 sec (only real signals)
+    if channel_text is None:
+        channel_text = private_text
+    def delayed():
+        time.sleep(10)
+        send_channel(channel_text)
+    threading.Thread(target=delayed, daemon=True).start()
 
 def get_rsi(candles, period=14):
     try:
@@ -155,7 +168,7 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.0 CHANNEL -1003709183793 BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
+    return f"V17.1 REAL->CH+10SEC BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -168,10 +181,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    msg = f"🤖 V17.0 CHANNEL LIVE\nBot confidence rate >> 85-100% 💯\n💰 10K-15K-20K RESET\nChannel {CHANNEL_ID}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\nChannel signals ON ✅"
-    bot.send_message(m.chat.id, msg)
-    try: bot.send_message(CHANNEL_ID, f"🤖 Bot Online V17.0\n85-100% 2-MIN\n💰 10K-15K-20K\n⏳ Next signal in {cd}")
-    except: pass
+    bot.send_message(m.chat.id, f"🤖 V17.1 LIVE\nBot confidence rate >> 85-100% 💯\n💰 10K-15K-20K RESET\nReal signals → Channel after 10s\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['next','countdown'])
 def next_cmd(m):
@@ -185,7 +195,7 @@ def reset_state(m):
     global martingale_level, current_amount, OWNER_ID
     OWNER_ID=m.chat.id
     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
-    send_all(f"🔄 RESET to $10000 Lvl 0")
+    send_private(f"🔄 RESET to $10000 Lvl 0")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -194,11 +204,11 @@ def resume(m):
     load_state()
     if not Iq: iq_connect()
     cd,_ = get_countdown()
-    send_all(f"▶️ RESUMED 10K-15K-20K\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    send_private(f"▶️ RESUMED 10K-15K-20K\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
-    global SCANNING; SCANNING=False; send_all("⏸️ Paused")
+    global SCANNING; SCANNING=False; send_private("⏸️ Paused")
 
 @bot.message_handler(commands=['balance','status'])
 def status(m):
@@ -216,7 +226,7 @@ def scan(m):
 def do_trade():
     global LAST_SIGNAL, current_amount, martingale_level, NEXT_SCAN_AT, ALERT_SENT
     if not Iq and not iq_connect():
-        send_all("❌ IQ login failed")
+        send_private("❌ IQ login failed")
         LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
     if not OWNER_ID: return
     PAIRS=get_pairs(); random.shuffle(PAIRS)
@@ -225,27 +235,35 @@ def do_trade():
         if direction:
             if conf < MIN_CONFIDENCE: continue
             try:
-                send_all(f"Bot confidence rate >> {conf}% 💯\n💯 2-MIN PERFECT {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}\n{'🚀 100% MAX!' if conf>=95 else '🔥 85%+ GOOD'}")
+                # REAL SIGNAL: You get now, channel gets after 10 sec
+                signal_text = f"Bot confidence rate >> {conf}% 💯\n💯 2-MIN PERFECT {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}\n{'🚀 100% MAX!' if conf>=95 else '🔥 85%+ GOOD'}"
+                send_signal_with_delay(signal_text, signal_text)
+
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status: continue
-                send_all(f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\n⏳ Wait 125s...")
+
+                bought_text = f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\n⏳ Wait 125s..."
+                send_signal_with_delay(bought_text, bought_text)
+
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
                 if profit and profit>0:
-                    send_all(f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next session in {cd}")
-                    send_all("🤑")
+                    result_text = f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next session in {cd}"
+                    send_signal_with_delay(result_text, result_text)
+                    send_signal_with_delay("🤑", "🤑")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    send_all(f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}\n⏳ Next session in {cd}")
-                    send_all("😮‍💨")
+                    result_text = f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}\n⏳ Next session in {cd}"
+                    send_signal_with_delay(result_text, result_text)
+                    send_signal_with_delay("😮‍💨", "😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
-                        send_all(f"⚠️ 10K-15K-20K DONE reset to $10000")
+                        send_signal_with_delay(f"⚠️ 10K-15K-20K DONE reset to $10000")
                         martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
-                        send_all(f"📈 Next ${current_amount} Lvl {martingale_level}")
+                        send_signal_with_delay(f"📈 Next ${current_amount} Lvl {martingale_level}")
                     save_state()
                 return
             except Exception as e: print(f"BUY ERR {e}", flush=True); continue
@@ -253,7 +271,8 @@ def do_trade():
     cd,_ = get_countdown()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    send_all(f"⏭️ No 85-100% signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next session in {cd}")
+    # No signal - ONLY TO YOU, NOT CHANNEL
+    send_private(f"⏭️ No 85-100% signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next session in {cd}")
 
 def scanner():
     while True:
@@ -273,12 +292,14 @@ def countdown_notifier():
             if not OWNER_ID or not SCANNING: continue
             cd, rem = get_countdown()
             if rem <= 5 and rem > 0 and not ALERT_SENT:
-                send_all(f"‼️Signal alert incoming ‼️\n💯Get Ready 💯\n5 secs to receiving the signal\nNext ${current_amount} Lvl {martingale_level}")
+                # Alert - ONLY TO YOU
+                send_private(f"‼️Signal alert incoming ‼️\n💯Get Ready 💯\n5 secs to receiving the signal\nNext ${current_amount} Lvl {martingale_level}")
                 ALERT_SENT = True
                 last_notified = time.time()
                 continue
             if rem in [90, 60, 30] and time.time() - last_notified > 25:
-                send_all(f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
+                # Countdown - ONLY TO YOU
+                send_private(f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
                 last_notified = time.time()
         except: time.sleep(2)
 
