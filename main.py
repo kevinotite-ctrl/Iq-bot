@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V16.8 10K-15K-20K RESET ===", flush=True)
+print("=== V16.8 1-2-4-RESET ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
