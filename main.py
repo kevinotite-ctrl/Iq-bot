@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V17.2.1 RISK AMOUNT ===", flush=True)
+print("=== V17.2.2 PROFIT TO CHANNEL ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -30,7 +30,6 @@ def load_state():
                 return True
     except: pass
     return False
-
 def save_state():
     try:
         with open(STATE_FILE, 'w') as f:
@@ -47,36 +46,29 @@ LAST_SIGNAL = 0
 RESUME_AT = time.time()
 NEXT_SCAN_AT = time.time() + 60
 ALERT_SENT = False
-
 WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC"]
 WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC"]
-
 def get_pairs():
     wd = datetime.datetime.now().weekday()
     return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
-
 def get_countdown():
     remaining = int(NEXT_SCAN_AT - time.time())
     if remaining < 0: remaining = 0
     m = remaining // 60
     s = remaining % 60
     return f"{m:02d}:{s:02d}", remaining
-
 def send_private(text):
     try:
         if OWNER_ID: bot.send_message(OWNER_ID, text)
     except: pass
-
 def send_channel(text):
     try: bot.send_message(CHANNEL_ID, text)
     except: pass
-
 def send_channel_big_signal(pair, direction, conf, reason):
     if direction == "call":
         big_dir = "🟢🟢🟢🟢🟢\n💹 BUY / CALL 💹💹\n🟢🟢🟢🟢🟢\n⬆️⬆️⬆️ GO UP ⬆️⬆️⬆️"
     else:
         big_dir = "🔴🔴🔴🔴🔴\n📉📉 SELL / PUT 📉📉\n🔴🔴🔴🔴🔴\n⬇️⬇️⬇️ GO DOWN ⬇️⬇️⬇️"
-
     channel_msg = f"""
 🔥🔥🔥🔥🔥🔥
 🚀🚀 NEW SIGNAL ALERT 🚀🚀
@@ -133,7 +125,6 @@ def get_rsi(candles, period=14):
         if al==0: return 85
         return 100-(100/(1+ag/al))
     except: return 50
-
 def get_ema(candles, period):
     try:
         closes=[c['close'] for c in candles]
@@ -141,7 +132,6 @@ def get_ema(candles, period):
         for p in closes[1:]: ema=p*k+ema*(1-k)
         return ema
     except: return 0
-
 def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
     try:
         confidence = 64
@@ -170,7 +160,6 @@ def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
             elif last_5[2] > last_5[3] > last_5[4]: confidence += 5
         return min(100, max(60, int(confidence)))
     except: return 80
-
 def iq_connect():
     global Iq
     try:
@@ -182,7 +171,6 @@ def iq_connect():
             return True
     except: pass
     return False
-
 def analyze(pair):
     try:
         candles = Iq.get_candles(pair, 60, 50, time.time())
@@ -202,8 +190,7 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.1 RISK BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
-
+    return f"V17.2.2 PROFIT TO CH BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
@@ -215,14 +202,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.1 BIG SIGNAL\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
-
-@bot.message_handler(commands=['reset'])
-def reset_state(m):
-    global martingale_level, current_amount, OWNER_ID
-    OWNER_ID=m.chat.id
-    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
-    send_private(f"🔄 RESET to $10000 Lvl 0")
+    bot.send_message(m.chat.id, f"🤖 V17.2.2\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -263,12 +243,14 @@ def do_trade():
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
                 if profit and profit>0:
-                    send_private(f"💰 WIN +${round(profit,2)} {conf}% CORRECT 💯 Bal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next in {cd}")
-                    send_private("🤑")
+                    result = f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next in {cd}"
+                    send_private(result); send_private("🤑")
+                    send_channel(result); send_channel("🤑")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    send_private(f"📉 LOSS -${current_amount} {conf}% FAILED Bal ${round(bal,2)}\n⏳ Next in {cd}")
-                    send_private("😮‍💨")
+                    result = f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}\n⏳ Next in {cd}"
+                    send_private(result); send_private("😮‍💨")
+                    send_channel(result); send_channel("😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
                         send_private(f"⚠️ 10K-15K-20K DONE reset to $10000")
