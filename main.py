@@ -2,14 +2,16 @@ import os, time, threading, random, datetime
 from flask import Flask
 import telebot
 
-print("=== V13.1 EMOJI ===", flush=True)
+print("=== V14 100-200-400 ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
 
-BASE_AMOUNT = 10
+# BIG MARTINGALE
+BASE_AMOUNT = 100
+MARTINGALE_AMOUNTS = [100, 200, 400] # Lvl 0,1,2
 MAX_MARTINGALE = 3
 current_amount = BASE_AMOUNT
 martingale_level = 0
@@ -75,7 +77,7 @@ def analyze(pair):
 iq_connect()
 
 @app.route('/')
-def home(): return f"V13.1 EMOJI BAL {Iq.get_balance() if Iq else 'NO IQ'}"
+def home(): return f"V14 BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount}"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -87,26 +89,26 @@ def start(m):
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    bot.send_message(m.chat.id, f"🤖 V13.1 MARTINGALE + EMOJI\nBal ${bal}\n$10 -> $20 -> $40 then reset\n🤑 Win | 😮‍💨 Loss\n/resume /pause /balance")
+    bot.send_message(m.chat.id, f"🤖 V14 BIG 100-200-400\nBal ${bal}\nLvl0 $100 Lvl1 $200 Lvl2 $400\nThen reset\n🤑 Win | 😮‍💨 Loss\n/resume /pause /balance")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, SCANNING
     OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
     if not Iq: iq_connect()
-    bot.send_message(m.chat.id, f"▶️ RESUMED Lvl {martingale_level} Amt ${current_amount}")
+    bot.send_message(m.chat.id, f"▶️ RESUMED {MARTINGALE_AMOUNTS[martingale_level]} Lvl {martingale_level}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
     global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
 
-@bot.message_handler(commands=['balance','status','pairs'])
+@bot.message_handler(commands=['balance','status'])
 def status(m):
     global OWNER_ID; OWNER_ID=m.chat.id
     if not Iq: iq_connect()
     try: b=round(Iq.get_balance(),2)
     except: b="?"
-    bot.send_message(m.chat.id, f"BAL ${b}\nAmt ${current_amount} Lvl {martingale_level}/{MAX_MARTINGALE}")
+    bot.send_message(m.chat.id, f"BAL ${b}\nNow ${current_amount} Lvl {martingale_level}\nSequence: 100->200->400")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
@@ -121,7 +123,6 @@ def do_trade():
     PAIRS=get_pairs(); random.shuffle(PAIRS)
     for pair in PAIRS:
         direction, reason = analyze(pair)
-        print(f"{pair} {direction} {reason} AMT {current_amount} LVL {martingale_level}", flush=True)
         if direction:
             try:
                 bot.send_message(OWNER_ID,f"📊 SIGNAL {pair} {direction.upper()}\nAmt ${current_amount} Lvl {martingale_level}\n{reason}")
@@ -130,30 +131,29 @@ def do_trade():
                 bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level}\nWait 65s...")
                 time.sleep(65)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time()
-
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)}\n{reason}\nBal ${round(bal,2)}\n🔄 Reset to ${BASE_AMOUNT}")
-                    bot.send_message(OWNER_ID,"🤑") # <-- PROFIT EMOJI
-                    current_amount=BASE_AMOUNT
+                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)}\n{reason}\nBal ${round(bal,2)}\n🔄 Reset to $100")
+                    bot.send_message(OWNER_ID,"🤑")
                     martingale_level=0
+                    current_amount=MARTINGALE_AMOUNTS[0]
                 else:
+                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount}\n{reason}\nBal ${round(bal,2)}")
+                    bot.send_message(OWNER_ID,"😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
-                        bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount}\n{reason}\n⚠️ 3 losses -> RESET to ${BASE_AMOUNT}\nBal ${round(bal,2)}")
-                        bot.send_message(OWNER_ID,"😮‍💨") # <-- LOSS EMOJI
-                        current_amount=BASE_AMOUNT
+                        bot.send_message(OWNER_ID,f"⚠️ 3 losses reset to $100")
                         martingale_level=0
+                        current_amount=MARTINGALE_AMOUNTS[0]
                     else:
-                        old_amt=current_amount
-                        current_amount = BASE_AMOUNT * (2 ** martingale_level)
-                        bot.send_message(OWNER_ID,f"📉 LOSS -${old_amt}\n{reason}\n📈 Next ${current_amount} Lvl {martingale_level}\nBal ${round(bal,2)}")
-                        bot.send_message(OWNER_ID,"😮‍💨") # <-- LOSS EMOJI
+                        current_amount=MARTINGALE_AMOUNTS[martingale_level]
+                        bot.send_message(OWNER_ID,f"📈 Next ${current_amount} Lvl {martingale_level}")
                 return
             except Exception as e: print(f"BUY ERR {e}", flush=True); continue
     LAST_SIGNAL=time.time()
-    try: bal=round(Iq.get_balance(),2)
-    except: bal="?"
-    if OWNER_ID: bot.send_message(OWNER_ID,f"⏭️ No trend Skip | Amt ${current_amount} Lvl {martingale_level} | Bal ${bal}")
+    if OWNER_ID:
+        try: bal=round(Iq.get_balance(),2)
+        except: bal="?"
+        bot.send_message(OWNER_ID,f"⏭️ No trend Skip | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}")
 
 def scanner():
     while True:
