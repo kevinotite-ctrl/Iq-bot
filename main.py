@@ -1,20 +1,46 @@
-import os, time, threading, random, datetime
+import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
 
-print("=== V14 100-200-400 ===", flush=True)
+print("=== V15 PERSISTENT 100-200-400 ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
 
-# BIG MARTINGALE
 BASE_AMOUNT = 100
-MARTINGALE_AMOUNTS = [100, 200, 400] # Lvl 0,1,2
+MARTINGALE_AMOUNTS = [100, 200, 400]
 MAX_MARTINGALE = 3
+
+STATE_FILE = "bot_state.json"
+
+# Load saved state if exists
+def load_state():
+    global current_amount, martingale_level
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                martingale_level = data.get('level', 0)
+                current_amount = MARTINGALE_AMOUNTS[martingale_level]
+                print(f"LOADED STATE Lvl {martingale_level} Amt {current_amount}", flush=True)
+                return True
+    except Exception as e:
+        print(f"LOAD ERR {e}", flush=True)
+    return False
+
+def save_state():
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump({'level': martingale_level, 'amount': current_amount, 'time': time.time()}, f)
+        print(f"SAVED STATE Lvl {martingale_level} Amt {current_amount}", flush=True)
+    except Exception as e:
+        print(f"SAVE ERR {e}", flush=True)
+
 current_amount = BASE_AMOUNT
 martingale_level = 0
+load_state() # Try load on boot
 
 OWNER_ID = None
 Iq = None
@@ -56,10 +82,8 @@ def iq_connect():
         from iqoptionapi.stable_api import IQ_Option
         Iq = IQ_Option(EMAIL, PASS)
         check, reason = Iq.connect()
-        print(f"IQ CONNECT {check} {reason}", flush=True)
         if check:
             Iq.change_balance("PRACTICE")
-            print(f"BAL {Iq.get_balance()}", flush=True)
             return True
     except Exception as e: print(f"IQ ERR {e}", flush=True)
     return False
@@ -77,30 +101,39 @@ def analyze(pair):
 iq_connect()
 
 @app.route('/')
-def home(): return f"V14 BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount}"
+def home(): return f"V15 REMEMBER BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} LVL {martingale_level}"
 
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    global OWNER_ID, RESUME_AT, LAST_SIGNAL, current_amount, martingale_level
+    global OWNER_ID, RESUME_AT, LAST_SIGNAL
     OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0
-    current_amount=BASE_AMOUNT; martingale_level=0
+    load_state() # Load on start too
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    bot.send_message(m.chat.id, f"🤖 V14 BIG 100-200-400\nBal ${bal}\nLvl0 $100 Lvl1 $200 Lvl2 $400\nThen reset\n🤑 Win | 😮‍💨 Loss\n/resume /pause /balance")
+    bot.send_message(m.chat.id, f"🤖 V15 REMEMBERS 100-200-400\nBal ${bal}\nSaved Lvl {martingale_level} Amt ${current_amount}\nSequence 100->200->400->reset\n🤑 Win | 😮‍💨 Loss\n/resume /pause /balance /reset")
+
+@bot.message_handler(commands=['reset'])
+def reset_state(m):
+    global martingale_level, current_amount, OWNER_ID
+    OWNER_ID=m.chat.id
+    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
+    save_state()
+    bot.send_message(m.chat.id, f"🔄 MANUALLY RESET to $100 Lvl 0")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, SCANNING
     OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
+    load_state()
     if not Iq: iq_connect()
-    bot.send_message(m.chat.id, f"▶️ RESUMED {MARTINGALE_AMOUNTS[martingale_level]} Lvl {martingale_level}")
+    bot.send_message(m.chat.id, f"▶️ RESUMED Saved ${current_amount} Lvl {martingale_level}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
-    global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
+    global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused - State saved")
 
 @bot.message_handler(commands=['balance','status'])
 def status(m):
@@ -108,7 +141,7 @@ def status(m):
     if not Iq: iq_connect()
     try: b=round(Iq.get_balance(),2)
     except: b="?"
-    bot.send_message(m.chat.id, f"BAL ${b}\nNow ${current_amount} Lvl {martingale_level}\nSequence: 100->200->400")
+    bot.send_message(m.chat.id, f"BAL ${b}\nSaved ${current_amount} Lvl {martingale_level}\nFile exists: {os.path.exists(STATE_FILE)}")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
@@ -132,12 +165,13 @@ def do_trade():
                 time.sleep(65)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time()
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)}\n{reason}\nBal ${round(bal,2)}\n🔄 Reset to $100")
+                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)}\nBal ${round(bal,2)}\n🔄 Reset to $100")
                     bot.send_message(OWNER_ID,"🤑")
                     martingale_level=0
                     current_amount=MARTINGALE_AMOUNTS[0]
+                    save_state()
                 else:
-                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount}\n{reason}\nBal ${round(bal,2)}")
+                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount}\nBal ${round(bal,2)}")
                     bot.send_message(OWNER_ID,"😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
@@ -147,6 +181,7 @@ def do_trade():
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
                         bot.send_message(OWNER_ID,f"📈 Next ${current_amount} Lvl {martingale_level}")
+                    save_state()
                 return
             except Exception as e: print(f"BUY ERR {e}", flush=True); continue
     LAST_SIGNAL=time.time()
