@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V17.2.2 PROFIT TO CHANNEL ===", flush=True)
+print("=== V17.2.3 FULL OTC WEEKEND ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -46,8 +46,19 @@ LAST_SIGNAL = 0
 RESUME_AT = time.time()
 NEXT_SCAN_AT = time.time() + 60
 ALERT_SENT = False
-WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC"]
-WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC"]
+
+# FULL OTC FOR WEEKEND - MORE SIGNALS
+WEEKEND_PAIRS = [
+    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC",
+    "AUDUSD-OTC", "EURGBP-OTC", "USDJPY-OTC", "AUDJPY-OTC",
+    "GBPCHF-OTC", "EURCHF-OTC", "USDCHF-OTC", "NZDUSD-OTC"
+]
+WEEKDAY_PAIRS = [
+    "EURUSD", "GBPUSD", "EURJPY", "USDJPY", "AUDUSD", "USDCAD",
+    "EURGBP", "USDCHF", "NZDUSD",
+    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC"
+]
+
 def get_pairs():
     wd = datetime.datetime.now().weekday()
     return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
@@ -84,7 +95,7 @@ def send_channel_big_signal(pair, direction, conf, reason):
 {reason}
 
 ⚡️⚡️ TAKE THE TRADE NOW ⚡️⚡️⚡️
-🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥
+🔥🔥🔥🔥🔥🔥
 """
     def delayed():
         time.sleep(10)
@@ -190,7 +201,8 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.2 PROFIT TO CH BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
+    pairs = get_pairs()
+    return f"V17.2.3 FULL OTC {len(pairs)} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
@@ -202,7 +214,8 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.2\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    pairs = get_pairs()
+    bot.send_message(m.chat.id, f"🤖 V17.2.3 FULL OTC WEEKEND\nPairs: {len(pairs)} {', '.join(pairs[:4])}...\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -211,7 +224,7 @@ def resume(m):
     load_state()
     if not Iq: iq_connect()
     cd,_ = get_countdown()
-    send_private(f"▶️ RESUMED\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    send_private(f"▶️ RESUMED FULL OTC {len(get_pairs())} pairs\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -269,7 +282,7 @@ def do_trade():
     cd,_ = get_countdown()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    send_private(f"⏭️ No 85-100% signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
+    send_private(f"⏭️ No 85-100% signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
 
 def scanner():
     while True:
