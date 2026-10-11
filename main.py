@@ -107,7 +107,7 @@ def send_channel_big_signal(pair, direction, conf, reason):
 
 1️⃣ Open IQ Option App
 2️⃣ Select Asset: {pair}
-3️⃣ Set Amount: ${current_amount}
+3️⃣ Set Amount: ${According the capacity of your account}
 4️⃣ Set Time: {EXPIRY} Minutes
 5️⃣ Click:
 {"🟢 GREEN BUTTON (CALL) 🟢" if direction=="call" else "🔴 RED BUTTON (PUT) 🔴"}
