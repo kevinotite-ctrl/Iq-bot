@@ -1,14 +1,12 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V17.2 BIG SIGNAL + WE GO AGAIN ===", flush=True)
+print("=== V17.2.1 RISK AMOUNT ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
-
 CHANNEL_ID = -1003709183793
-
 BASE_AMOUNT = 10000
 MARTINGALE_AMOUNTS = [10000, 15000, 20000]
 MAX_MARTINGALE = 3
@@ -74,23 +72,22 @@ def send_channel(text):
     except: pass
 
 def send_channel_big_signal(pair, direction, conf, reason):
-    # BIG VISIBLE SIGNAL FOR CHANNEL
     if direction == "call":
         big_dir = "🟢🟢🟢🟢🟢\n💹 BUY / CALL 💹💹\n🟢🟢🟢🟢🟢\n⬆️⬆️⬆️ GO UP ⬆️⬆️⬆️"
     else:
         big_dir = "🔴🔴🔴🔴🔴\n📉📉 SELL / PUT 📉📉\n🔴🔴🔴🔴🔴\n⬇️⬇️⬇️ GO DOWN ⬇️⬇️⬇️"
 
     channel_msg = f"""
-🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥
+🔥🔥🔥🔥🔥🔥
 🚀🚀 NEW SIGNAL ALERT 🚀🚀
-🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥
+🔥🔥🔥🔥🔥🔥
 
 💰 PAIR: {pair}
 {big_dir}
 
 ⏰ EXPIRY: {EXPIRY} MINUTES
 🎯 CONFIDENCE: {conf}% 💯
-💵 AMOUNT: ${current_amount}
+💵 AMOUNT: At your own risk 💰
 
 {reason}
 
@@ -98,16 +95,15 @@ def send_channel_big_signal(pair, direction, conf, reason):
 🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥
 """
     def delayed():
-        time.sleep(10) # 10 sec delay as requested
+        time.sleep(10)
         send_channel(channel_msg)
         time.sleep(2)
-        # HOW TO PLACE TRADE GUIDE - ONLY CHANNEL
         guide = f"""
 📚 HOW TO PLACE TRADE ON IQ OPTION 📚
 
 1️⃣ Open IQ Option App
 2️⃣ Select Asset: {pair}
-3️⃣ Set Amount: ${According the capacity of your account}
+3️⃣ Set Amount: At your own risk 💰
 4️⃣ Set Time: {EXPIRY} Minutes
 5️⃣ Click:
 {"🟢 GREEN BUTTON (CALL) 🟢" if direction=="call" else "🔴 RED BUTTON (PUT) 🔴"}
@@ -118,13 +114,11 @@ def send_channel_big_signal(pair, direction, conf, reason):
 👇 Example below 👇
 """
         send_channel(guide)
-        # Try to send example photo if exists
         try:
             if os.path.exists("iq_example.jpg"):
                 with open("iq_example.jpg", "rb") as photo:
                     bot.send_photo(CHANNEL_ID, photo, caption=f"{pair} {direction.upper()} Example")
         except: pass
-
     threading.Thread(target=delayed, daemon=True).start()
 
 def get_rsi(candles, period=14):
@@ -208,7 +202,7 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2 BIG SIGNAL BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
+    return f"V17.2.1 RISK BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -221,7 +215,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2 BIG SIGNAL\n85-100% 10K-15K-20K\nChannel {CHANNEL_ID}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    bot.send_message(m.chat.id, f"🤖 V17.2.1 BIG SIGNAL\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['reset'])
 def reset_state(m):
@@ -259,18 +253,12 @@ def do_trade():
         if direction:
             if conf < MIN_CONFIDENCE: continue
             try:
-                # PRIVATE - small detailed
                 private_msg = f"Bot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
                 send_private(private_msg)
-
-                # CHANNEL - BIG VISIBLE after 10 sec + guide
                 send_channel_big_signal(pair, direction, conf, reason)
-
-                # TRADE - DO NOT SEND TO CHANNEL
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status: continue
                 send_private(f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\n⏳ Wait 125s...")
-
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
@@ -289,13 +277,10 @@ def do_trade():
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
                         send_private(f"📈 Next ${current_amount} Lvl {martingale_level}")
                     save_state()
-
-                # AFTER SESSION -> ONLY CHANNEL: We go again
                 def we_go_again():
                     time.sleep(3)
                     send_channel("We go again ‼️‼️💯")
                 threading.Thread(target=we_go_again, daemon=True).start()
-
                 return
             except Exception as e: print(f"BUY ERR {e}", flush=True); continue
     LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
