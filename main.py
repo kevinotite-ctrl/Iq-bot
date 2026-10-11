@@ -2,7 +2,7 @@ import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
 
-print("=== V15 PERSISTENT 100-200-400 ===", flush=True)
+print("=== V16.1 80%+ CONF ONLY 100-200-400 ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -12,10 +12,9 @@ PASS = os.getenv("IQ_PASSWORD")
 BASE_AMOUNT = 100
 MARTINGALE_AMOUNTS = [100, 200, 400]
 MAX_MARTINGALE = 3
-
 STATE_FILE = "bot_state.json"
+MIN_CONFIDENCE = 80 # ONLY 80%+
 
-# Load saved state if exists
 def load_state():
     global current_amount, martingale_level
     try:
@@ -24,23 +23,19 @@ def load_state():
                 data = json.load(f)
                 martingale_level = data.get('level', 0)
                 current_amount = MARTINGALE_AMOUNTS[martingale_level]
-                print(f"LOADED STATE Lvl {martingale_level} Amt {current_amount}", flush=True)
                 return True
-    except Exception as e:
-        print(f"LOAD ERR {e}", flush=True)
+    except: pass
     return False
 
 def save_state():
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump({'level': martingale_level, 'amount': current_amount, 'time': time.time()}, f)
-        print(f"SAVED STATE Lvl {martingale_level} Amt {current_amount}", flush=True)
-    except Exception as e:
-        print(f"SAVE ERR {e}", flush=True)
+    except: pass
 
 current_amount = BASE_AMOUNT
 martingale_level = 0
-load_state() # Try load on boot
+load_state()
 
 OWNER_ID = None
 Iq = None
@@ -64,7 +59,7 @@ def get_rsi(candles, period=14):
             gains.append(max(d,0)); losses.append(max(-d,0))
         if len(gains)<period: return 50
         ag=sum(gains[-period:])/period; al=sum(losses[-period:])/period
-        if al==0: return 70
+        if al==0: return 75
         return 100-(100/(1+ag/al))
     except: return 50
 
@@ -76,6 +71,26 @@ def get_ema(candles, period):
         return ema
     except: return 0
 
+def calculate_confidence(candles, ema7, ema21, rsi, direction):
+    try:
+        confidence = 60
+        closes=[c['close'] for c in candles]
+        gap = abs(ema7-ema21) / ema21 * 1000
+        if gap > 0.8: confidence += 15
+        elif gap > 0.4: confidence += 10
+        elif gap > 0.2: confidence += 5
+        if direction=="call":
+            if 60 <= rsi <= 68: confidence += 15
+            elif 55 <= rsi <= 72: confidence += 8
+        else:
+            if 32 <= rsi <= 40: confidence += 15
+            elif 28 <= rsi <= 45: confidence += 8
+        last_3 = closes[-3:]
+        if direction=="call" and last_3[0] < last_3[1] < last_3[2]: confidence += 10
+        elif direction=="put" and last_3[0] > last_3[1] > last_3[2]: confidence += 10
+        return min(92, max(60, int(confidence)))
+    except: return 70
+
 def iq_connect():
     global Iq
     try:
@@ -85,23 +100,28 @@ def iq_connect():
         if check:
             Iq.change_balance("PRACTICE")
             return True
-    except Exception as e: print(f"IQ ERR {e}", flush=True)
+    except: pass
     return False
 
 def analyze(pair):
     try:
         candles = Iq.get_candles(pair, 60, 50, time.time())
-        if not candles or len(candles)<25: return None, "No candles"
+        if not candles or len(candles)<25: return None, "No candles", 0
         ema7=get_ema(candles[-15:],7); ema21=get_ema(candles,21); rsi=get_rsi(candles,14); close=candles[-1]['close']
-        if close>ema7>ema21 and 55<rsi<75: return "call", f"UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
-        elif close<ema7<ema21 and 25<rsi<45: return "put", f"DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
-        else: return None, f"SKIP RSI {round(rsi,1)}"
-    except Exception as e: return None, f"Err {e}"
+        if close>ema7>ema21 and 55<rsi<75:
+            conf = calculate_confidence(candles, ema7, ema21, rsi, "call")
+            return "call", f"UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
+        elif close<ema7<ema21 and 25<rsi<45:
+            conf = calculate_confidence(candles, ema7, ema21, rsi, "put")
+            return "put", f"DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
+        else:
+            return None, f"SKIP RSI {round(rsi,1)}", 0
+    except Exception as e: return None, f"Err {e}", 0
 
 iq_connect()
 
 @app.route('/')
-def home(): return f"V15 REMEMBER BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} LVL {martingale_level}"
+def home(): return f"V16.1 80%+ BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} LVL {martingale_level}"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -109,19 +129,18 @@ bot = telebot.TeleBot(TOKEN)
 def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL
     OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0
-    load_state() # Load on start too
+    load_state()
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    bot.send_message(m.chat.id, f"🤖 V15 REMEMBERS 100-200-400\nBal ${bal}\nSaved Lvl {martingale_level} Amt ${current_amount}\nSequence 100->200->400->reset\n🤑 Win | 😮‍💨 Loss\n/resume /pause /balance /reset")
+    bot.send_message(m.chat.id, f"🤖 V16.1 80%+ CONF ONLY\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\nOnly trades 80-92% confidence\n/resume /pause /balance /reset")
 
 @bot.message_handler(commands=['reset'])
 def reset_state(m):
     global martingale_level, current_amount, OWNER_ID
     OWNER_ID=m.chat.id
-    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
-    save_state()
-    bot.send_message(m.chat.id, f"🔄 MANUALLY RESET to $100 Lvl 0")
+    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
+    bot.send_message(m.chat.id, f"🔄 RESET to $100 Lvl 0")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -129,11 +148,11 @@ def resume(m):
     OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
     load_state()
     if not Iq: iq_connect()
-    bot.send_message(m.chat.id, f"▶️ RESUMED Saved ${current_amount} Lvl {martingale_level}")
+    bot.send_message(m.chat.id, f"▶️ RESUMED 80%+ Mode Saved ${current_amount} Lvl {martingale_level}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
-    global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused - State saved")
+    global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
 
 @bot.message_handler(commands=['balance','status'])
 def status(m):
@@ -141,7 +160,7 @@ def status(m):
     if not Iq: iq_connect()
     try: b=round(Iq.get_balance(),2)
     except: b="?"
-    bot.send_message(m.chat.id, f"BAL ${b}\nSaved ${current_amount} Lvl {martingale_level}\nFile exists: {os.path.exists(STATE_FILE)}")
+    bot.send_message(m.chat.id, f"BAL ${b}\nNext ${current_amount} Lvl {martingale_level}\n80%+ Only")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
@@ -155,29 +174,29 @@ def do_trade():
     if not OWNER_ID: return
     PAIRS=get_pairs(); random.shuffle(PAIRS)
     for pair in PAIRS:
-        direction, reason = analyze(pair)
+        direction, reason, conf = analyze(pair)
         if direction:
+            if conf < MIN_CONFIDENCE: # SKIP LOW CONF
+                print(f"SKIP {pair} {conf}% <80%", flush=True)
+                continue
             try:
-                bot.send_message(OWNER_ID,f"📊 SIGNAL {pair} {direction.upper()}\nAmt ${current_amount} Lvl {martingale_level}\n{reason}")
+                bot.send_message(OWNER_ID,f"🔥 HIGH CONF {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level}\n{reason}\n✅ 80%+ APPROVED")
                 status, trade_id = Iq.buy(current_amount, pair, direction, 1)
                 if not status: continue
-                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level}\nWait 65s...")
+                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}%\nWait 65s...")
                 time.sleep(65)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time()
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)}\nBal ${round(bal,2)}\n🔄 Reset to $100")
+                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Conf {conf}% CORRECT\nBal ${round(bal,2)}\n🔄 Reset to $100")
                     bot.send_message(OWNER_ID,"🤑")
-                    martingale_level=0
-                    current_amount=MARTINGALE_AMOUNTS[0]
-                    save_state()
+                    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount}\nBal ${round(bal,2)}")
+                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount} Conf {conf}% FAILED\nBal ${round(bal,2)}")
                     bot.send_message(OWNER_ID,"😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
                         bot.send_message(OWNER_ID,f"⚠️ 3 losses reset to $100")
-                        martingale_level=0
-                        current_amount=MARTINGALE_AMOUNTS[0]
+                        martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
                         bot.send_message(OWNER_ID,f"📈 Next ${current_amount} Lvl {martingale_level}")
@@ -188,7 +207,7 @@ def do_trade():
     if OWNER_ID:
         try: bal=round(Iq.get_balance(),2)
         except: bal="?"
-        bot.send_message(OWNER_ID,f"⏭️ No trend Skip | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}")
+        bot.send_message(OWNER_ID,f"⏭️ No 80%+ signal found | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}")
 
 def scanner():
     while True:
