@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V16.4 95-100% ULTRA ===", flush=True)
+print("=== V16.5 95-100% 2-MIN EXPIRY ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -11,6 +11,7 @@ MARTINGALE_AMOUNTS = [100, 200, 400]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
 MIN_CONFIDENCE = 95
+EXPIRY = 2 # 2 MINUTES NOW
 
 def load_state():
     global current_amount, martingale_level
@@ -66,30 +67,39 @@ def get_ema(candles, period):
         return ema
     except: return 0
 
-def calculate_confidence(candles, ema7, ema21, rsi, direction):
+def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
     try:
-        confidence = 62
+        confidence = 64
         closes=[c['close'] for c in candles]
         gap = abs(ema7-ema21) / ema21 * 1000
-        if gap > 1.0: confidence += 18
-        elif gap > 0.6: confidence += 13
-        elif gap > 0.3: confidence += 8
-        elif gap > 0.15: confidence += 4
+
+        # 2-MIN NEEDS BIGGER GAP
+        if gap > 1.2: confidence += 20
+        elif gap > 0.8: confidence += 15
+        elif gap > 0.4: confidence += 9
+        elif gap > 0.2: confidence += 5
+
+        # 2-MIN RSI SWEET SPOT
         if direction=="call":
-            if 61 <= rsi <= 67: confidence += 18
-            elif 58 <= rsi <= 70: confidence += 12
-            elif 55 <= rsi <= 72: confidence += 6
+            if 62 <= rsi <= 67: confidence += 18
+            elif 60 <= rsi <= 70: confidence += 12
+            elif 56 <= rsi <= 73: confidence += 6
         else:
-            if 33 <= rsi <= 39: confidence += 18
-            elif 30 <= rsi <= 42: confidence += 12
-            elif 27 <= rsi <= 45: confidence += 6
-        last_4 = closes[-4:]
+            if 33 <= rsi <= 38: confidence += 18
+            elif 30 <= rsi <= 40: confidence += 12
+            elif 27 <= rsi <= 43: confidence += 6
+
+        # 2-MIN NEEDS 5 CANDLES TREND FOR 100%
+        last_5 = closes[-5:]
         if direction=="call":
-            if last_4[0] < last_4[1] < last_4[2] < last_4[3]: confidence += 12
-            elif last_4[1] < last_4[2] < last_4[3]: confidence += 7
+            if last_5[0] < last_5[1] < last_5[2] < last_5[3] < last_5[4]: confidence += 14
+            elif last_5[1] < last_5[2] < last_5[3] < last_5[4]: confidence += 9
+            elif last_5[2] < last_5[3] < last_5[4]: confidence += 5
         else:
-            if last_4[0] > last_4[1] > last_4[2] > last_4[3]: confidence += 12
-            elif last_4[1] > last_4[2] > last_4[3]: confidence += 7
+            if last_5[0] > last_5[1] > last_5[2] > last_5[3] > last_5[4]: confidence += 14
+            elif last_5[1] > last_5[2] > last_5[3] > last_5[4]: confidence += 9
+            elif last_5[2] > last_5[3] > last_5[4]: confidence += 5
+
         return min(100, max(60, int(confidence)))
     except: return 80
 
@@ -110,19 +120,20 @@ def analyze(pair):
         candles = Iq.get_candles(pair, 60, 50, time.time())
         if not candles or len(candles)<25: return None, "No candles", 0
         ema7=get_ema(candles[-15:],7); ema21=get_ema(candles,21); rsi=get_rsi(candles,14); close=candles[-1]['close']
-        if close>ema7>ema21 and 55<rsi<75:
-            conf = calculate_confidence(candles, ema7, ema21, rsi, "call")
-            return "call", f"UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
-        elif close<ema7<ema21 and 25<rsi<45:
-            conf = calculate_confidence(candles, ema7, ema21, rsi, "put")
-            return "put", f"DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
+        # 2-MIN FILTERS TIGHTER
+        if close>ema7>ema21 and 56<rsi<73:
+            conf = calculate_confidence_2min(candles, ema7, ema21, rsi, "call")
+            return "call", f"2-MIN UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
+        elif close<ema7<ema21 and 27<rsi<44:
+            conf = calculate_confidence_2min(candles, ema7, ema21, rsi, "put")
+            return "put", f"2-MIN DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
         else:
             return None, f"SKIP RSI {round(rsi,1)}", 0
     except: return None, f"Err", 0
 
 iq_connect()
 @app.route('/')
-def home(): return f"V16.4 95-100% BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} LVL {martingale_level}"
+def home(): return f"V16.5 95-100% 2MIN BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} LVL {martingale_level}"
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
@@ -133,7 +144,7 @@ def start(m):
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    bot.send_message(m.chat.id, f"🤖 V16.4 Bot confidence rate >> 95-100% 💯\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\nOnly 95-100% ULTRA trades\n/resume /pause /balance /reset")
+    bot.send_message(m.chat.id, f"🤖 V16.5 2-MIN EXPIRY\nBot confidence rate >> 95-100% 💯\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\nExpiry {EXPIRY}min | Only 95-100%\n/resume /pause /balance /reset")
 
 @bot.message_handler(commands=['reset'])
 def reset_state(m):
@@ -148,7 +159,7 @@ def resume(m):
     OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
     load_state()
     if not Iq: iq_connect()
-    bot.send_message(m.chat.id, f"▶️ RESUMED 95-100% Mode Saved ${current_amount} Lvl {martingale_level}")
+    bot.send_message(m.chat.id, f"▶️ RESUMED 2-MIN 95-100% Saved ${current_amount} Lvl {martingale_level}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -160,7 +171,7 @@ def status(m):
     if not Iq: iq_connect()
     try: b=round(Iq.get_balance(),2)
     except: b="?"
-    bot.send_message(m.chat.id, f"BAL ${b}\nNext ${current_amount} Lvl {martingale_level}\n95-100% Only")
+    bot.send_message(m.chat.id, f"BAL ${b}\nNext ${current_amount} Lvl {martingale_level}\n2-MIN 95-100% Only")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
@@ -178,18 +189,18 @@ def do_trade():
         if direction:
             if conf < MIN_CONFIDENCE: continue
             try:
-                bot.send_message(OWNER_ID,f"Bot confidence rate >> {conf}% 💯\n💯 PERFECT SIGNAL {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level}\n{reason}\n{'🚀 100% MAX CONF!' if conf==100 else '🔥 95%+ ULTRA HIGH'}")
-                status, trade_id = Iq.buy(current_amount, pair, direction, 1)
+                bot.send_message(OWNER_ID,f"Bot confidence rate >> {conf}% 💯\n💯 2-MIN PERFECT {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}\n{'🚀 100% 2-MIN MAX!' if conf==100 else '🔥 95%+ 2-MIN ULTRA'}")
+                status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status: continue
-                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}%\nWait 65s...")
-                time.sleep(65)
+                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\nWait 125s...")
+                time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time()
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $100")
+                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% 2-MIN CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $100")
                     bot.send_message(OWNER_ID,"🤑")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}")
+                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% 2-MIN FAILED\nBal ${round(bal,2)}")
                     bot.send_message(OWNER_ID,"😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
@@ -205,14 +216,14 @@ def do_trade():
     if OWNER_ID:
         try: bal=round(Iq.get_balance(),2)
         except: bal="?"
-        bot.send_message(OWNER_ID,f"⏭️ No 95-100% signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}")
+        bot.send_message(OWNER_ID,f"⏭️ No 95-100% 2-MIN signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}")
 
 def scanner():
     while True:
         try:
             time.sleep(10)
             if not OWNER_ID or not SCANNING: continue
-            if time.time() - (RESUME_AT if LAST_SIGNAL==0 else LAST_SIGNAL) < (120 if LAST_SIGNAL==0 else 180): continue
+            if time.time() - (RESUME_AT if LAST_SIGNAL==0 else LAST_SIGNAL) < (120 if LAST_SIGNAL==0 else 240): continue
             do_trade()
         except Exception as e: print(f"SCAN ERR {e}", flush=True); time.sleep(5)
 
