@@ -1,18 +1,19 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V16.6 85-100% 2-MIN COUNTDOWN ===", flush=True)
+print("=== V16.8 10K-15K-20K RESET ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
-BASE_AMOUNT = 100
-MARTINGALE_AMOUNTS = [1,2,4]
+
+BASE_AMOUNT = 10000
+MARTINGALE_AMOUNTS = [10000, 15000, 20000] # NEW HIGH STAKE
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
 MIN_CONFIDENCE = 85
 EXPIRY = 2
-SCAN_INTERVAL = 120 # 2 minutes between scans
+SCAN_INTERVAL = 120
 
 def load_state():
     global current_amount, martingale_level
@@ -21,7 +22,11 @@ def load_state():
             with open(STATE_FILE, 'r') as f:
                 data = json.load(f)
                 martingale_level = data.get('level', 0)
-                current_amount = MARTINGALE_AMOUNTS[martingale_level]
+                if martingale_level < len(MARTINGALE_AMOUNTS):
+                    current_amount = MARTINGALE_AMOUNTS[martingale_level]
+                else:
+                    martingale_level = 0
+                    current_amount = MARTINGALE_AMOUNTS[0]
                 return True
     except: pass
     return False
@@ -40,7 +45,7 @@ Iq = None
 SCANNING = True
 LAST_SIGNAL = 0
 RESUME_AT = time.time()
-NEXT_SCAN_AT = time.time() + 120
+NEXT_SCAN_AT = time.time() + 60
 
 WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC"]
 WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC"]
@@ -137,20 +142,20 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V16.6 85-100% 2MIN BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
+    return f"V16.8 10K-15K-20K BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
 
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
 def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, NEXT_SCAN_AT
-    OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+120
+    OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60
     load_state()
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V16.6 2-MIN + COUNTDOWN\nBot confidence rate >> 85-100% 💯\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\nExpiry {EXPIRY}min\n⏳ Next signal in {cd}\n/resume /pause /balance /next /reset")
+    bot.send_message(m.chat.id, f"🤖 V16.8 HIGH STAKE\nBot confidence rate >> 85-100% 💯\n💰 10K-15K-20K then RESET\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\nExp {EXPIRY}min Gap 2min\n⏳ Next session in {cd}\n/resume /pause /balance /next /reset")
 
 @bot.message_handler(commands=['next','countdown'])
 def next_cmd(m):
@@ -158,23 +163,23 @@ def next_cmd(m):
     cd, rem = get_countdown()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    bot.send_message(m.chat.id, f"⏳ COUNTDOWN\nNext signal in {cd} ({rem}s)\nNext ${current_amount} Lvl {martingale_level}\nBal ${bal}\nScanning {'ON' if SCANNING else 'OFF'}\n85-100% 2-MIN")
+    bot.send_message(m.chat.id, f"⏳ COUNTDOWN\nNext session in {cd} ({rem}s)\nNext ${current_amount} Lvl {martingale_level}\nBal ${bal}")
 
 @bot.message_handler(commands=['reset'])
 def reset_state(m):
     global martingale_level, current_amount, OWNER_ID
     OWNER_ID=m.chat.id
     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
-    bot.send_message(m.chat.id, f"🔄 RESET to $100 Lvl 0")
+    bot.send_message(m.chat.id, f"🔄 RESET to $10000 Lvl 0")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, SCANNING, NEXT_SCAN_AT
-    OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+120
+    OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60
     load_state()
     if not Iq: iq_connect()
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"▶️ RESUMED 85-100% 2-MIN\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next signal in {cd}")
+    bot.send_message(m.chat.id, f"▶️ RESUMED 10K-15K-20K\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next session in {cd}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -187,7 +192,7 @@ def status(m):
     try: b=round(Iq.get_balance(),2)
     except: b="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"BAL ${b}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\n2-MIN 85-100%")
+    bot.send_message(m.chat.id, f"BAL ${b}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\n10K-15K-20K 85-100%")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
@@ -205,23 +210,23 @@ def do_trade():
         if direction:
             if conf < MIN_CONFIDENCE: continue
             try:
-                bot.send_message(OWNER_ID,f"Bot confidence rate >> {conf}% 💯\n💯 2-MIN PERFECT {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}\n{'🚀 100% 2-MIN MAX!' if conf>=95 else '🔥 85%+ GOOD'}")
+                bot.send_message(OWNER_ID,f"Bot confidence rate >> {conf}% 💯\n💯 2-MIN PERFECT {pair} {direction.upper()} {conf}% Confidence\nAmt ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}\n{'🚀 100% MAX!' if conf>=95 else '🔥 85%+ GOOD'}")
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status: continue
-                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\nWait 125s...")
+                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\n⏳ Wait 125s...")
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL
                 cd,_ = get_countdown()
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% 2-MIN CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $100\n⏳ Next signal in {cd}")
+                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next session in {cd}")
                     bot.send_message(OWNER_ID,"🤑")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% 2-MIN FAILED\nBal ${round(bal,2)}\n⏳ Next signal in {cd}")
+                    bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}\n⏳ Next session in {cd}")
                     bot.send_message(OWNER_ID,"😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
-                        bot.send_message(OWNER_ID,f"⚠️ 3 losses reset to $100")
+                        bot.send_message(OWNER_ID,f"⚠️ 10K-15K-20K DONE reset to $10000")
                         martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
@@ -234,12 +239,12 @@ def do_trade():
     if OWNER_ID:
         try: bal=round(Iq.get_balance(),2)
         except: bal="?"
-        bot.send_message(OWNER_ID,f"⏭️ No 85-100% 2-MIN signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next scan in {cd}")
+        bot.send_message(OWNER_ID,f"⏭️ No 85-100% signal | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next session in {cd}")
 
 def scanner():
     while True:
         try:
-            time.sleep(10)
+            time.sleep(5)
             if not OWNER_ID or not SCANNING: continue
             if time.time() < NEXT_SCAN_AT: continue
             do_trade()
@@ -249,11 +254,11 @@ def countdown_notifier():
     last_notified = 0
     while True:
         try:
-            time.sleep(30)
+            time.sleep(20)
             if not OWNER_ID or not SCANNING: continue
             cd, rem = get_countdown()
-            if rem in [180, 120, 60] and time.time() - last_notified > 50:
-                bot.send_message(OWNER_ID, f"⏳ Countdown: Next signal in {cd}\nNext ${current_amount} Lvl {martingale_level}")
+            if rem in [90, 60, 30] and time.time() - last_notified > 25:
+                bot.send_message(OWNER_ID, f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
                 last_notified = time.time()
         except: time.sleep(5)
 
