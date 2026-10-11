@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.2.5 WEBHOOK 409 PERMANENT FIX ===", flush=True)
+print("=== V17.4 AUTO 65% WEEKEND / 85% WEEKDAY ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -11,11 +11,17 @@ BASE_AMOUNT = 10000
 MARTINGALE_AMOUNTS = [10000, 15000, 20000]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
-MIN_CONFIDENCE = 85
 EXPIRY = 2
-SCAN_INTERVAL = 120
-# YOUR RENDER URL - CHANGE IF NEEDED
-RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") or "https://your-service-name.onrender.com"
+SCAN_INTERVAL = 120 # Auto scan every 2 mins
+
+# AUTO CONFIDENCE LOGIC
+def get_min_conf():
+    wd = datetime.datetime.now().weekday()
+    # 0=Mon... 4=Fri, 5=Sat, 6=Sun
+    if wd >= 5: # Saturday, Sunday
+        return 65
+    else: # Monday-Friday
+        return 85
 
 def load_state():
     global current_amount, martingale_level
@@ -32,6 +38,7 @@ def load_state():
                 return True
     except: pass
     return False
+
 def save_state():
     try:
         with open(STATE_FILE, 'w') as f:
@@ -62,6 +69,7 @@ WEEKDAY_PAIRS = [
 def get_pairs():
     wd = datetime.datetime.now().weekday()
     return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
+
 def get_countdown():
     remaining = int(NEXT_SCAN_AT - time.time())
     if remaining < 0: remaining = 0
@@ -75,6 +83,7 @@ def send_private(text):
     try:
         if OWNER_ID: bot.send_message(OWNER_ID, text)
     except: pass
+
 def send_channel(text):
     try: bot.send_message(CHANNEL_ID, text)
     except: pass
@@ -116,8 +125,6 @@ def send_channel_big_signal(pair, direction, conf, reason):
 
 ⚠️ Trade immediately after signal!
 💯 Bot confidence {conf}%
-
-👇 Example below 👇
 """
         send_channel(guide)
         try:
@@ -139,6 +146,7 @@ def get_rsi(candles, period=14):
         if al==0: return 85
         return 100-(100/(1+ag/al))
     except: return 50
+
 def get_ema(candles, period):
     try:
         closes=[c['close'] for c in candles]
@@ -146,6 +154,7 @@ def get_ema(candles, period):
         for p in closes[1:]: ema=p*k+ema*(1-k)
         return ema
     except: return 0
+
 def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
     try:
         confidence = 64
@@ -174,6 +183,7 @@ def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
             elif last_5[2] > last_5[3] > last_5[4]: confidence += 5
         return min(100, max(60, int(confidence)))
     except: return 80
+
 def iq_connect():
     global Iq
     try:
@@ -185,6 +195,7 @@ def iq_connect():
             return True
     except: pass
     return False
+
 def analyze(pair):
     try:
         candles = Iq.get_candles(pair, 60, 50, time.time())
@@ -202,11 +213,10 @@ def analyze(pair):
 
 iq_connect()
 
-# WEBHOOK ROUTES - FIXES 409
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.5 WEBHOOK LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
+    return f"V17.4 AUTO {len(get_pairs())} pairs Min {get_min_conf()}% BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -222,13 +232,15 @@ def set_webhook():
     try:
         bot.remove_webhook()
         time.sleep(1)
-        url = f"{RENDER_URL}/{TOKEN}"
-        bot.set_webhook(url=url)
-        return f"Webhook set to {url}"
+        ext_url = os.getenv("RENDER_EXTERNAL_URL")
+        if ext_url:
+            url = f"{ext_url}/{TOKEN}"
+            bot.set_webhook(url=url)
+            return f"Webhook set to {url}"
+        return "No URL"
     except Exception as e:
         return f"Error {e}"
 
-# BOT COMMANDS
 @bot.message_handler(commands=['start'])
 def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, NEXT_SCAN_AT
@@ -238,7 +250,18 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.5 WEBHOOK FIXED ✅\nPairs: {len(get_pairs())} OTC\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\nNo more 409!")
+    min_c = get_min_conf()
+    is_weekend = "WEEKEND 65-100%" if datetime.datetime.now().weekday()>=5 else "WEEKDAY 85-100%"
+    bot.send_message(m.chat.id, f"🤖 V17.4 AUTO MODE ✅\n{is_weekend}\nMin Conf: {min_c}%\nPairs: {len(get_pairs())} OTC\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Auto scan in {cd}\nNo need /scan - bot sends itself!")
+
+@bot.message_handler(commands=['balance'])
+def balance_cmd(m):
+    global OWNER_ID; OWNER_ID=m.chat.id
+    try:
+        bal = round(Iq.get_balance(),2)
+        bot.send_message(m.chat.id, f"💰 Balance: ${bal}\nNext: ${current_amount} Lvl {martingale_level} Min {get_min_conf()}%")
+    except:
+        bot.send_message(m.chat.id, "❌ IQ not connected")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -247,7 +270,7 @@ def resume(m):
     load_state()
     if not Iq: iq_connect()
     cd,_ = get_countdown()
-    send_private(f"▶️ RESUMED {len(get_pairs())} pairs\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    send_private(f"▶️ AUTO RESUMED Min {get_min_conf()}%\nNext ${current_amount} Lvl {martingale_level}\n⏳ Auto in {cd}")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -264,13 +287,13 @@ def do_trade():
         LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
     if not OWNER_ID: return
     PAIRS=get_pairs(); random.shuffle(PAIRS)
+    min_c = get_min_conf()
     for pair in PAIRS:
         direction, reason, conf = analyze(pair)
         if direction:
-            if conf < MIN_CONFIDENCE: continue
+            if conf < min_c: continue
             try:
-                private_msg = f"Bot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
-                send_private(private_msg)
+                send_private(f"Bot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}")
                 send_channel_big_signal(pair, direction, conf, reason)
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status: continue
@@ -292,19 +315,15 @@ def do_trade():
                         martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
-                        send_private(f"📈 Next ${current_amount} Lvl {martingale_level}")
                     save_state()
-                def we_go_again():
-                    time.sleep(3)
-                    send_channel("We go again ‼️‼️💯")
-                threading.Thread(target=we_go_again, daemon=True).start()
+                threading.Thread(target=lambda: (time.sleep(3), send_channel("We go again ‼️‼️💯")), daemon=True).start()
                 return
             except: continue
     LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
     cd,_ = get_countdown()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    send_private(f"⏭️ No 85-100% signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
+    send_private(f"⏭️ No {min_c}-100% signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Auto retry in {cd}")
 
 def scanner():
     while True:
@@ -324,12 +343,12 @@ def countdown_notifier():
             if not OWNER_ID or not SCANNING: continue
             cd, rem = get_countdown()
             if rem <= 5 and rem > 0 and not ALERT_SENT:
-                send_private(f"‼️Signal alert incoming ‼️\n💯Get Ready 💯\n5 secs to receiving the signal\nNext ${current_amount} Lvl {martingale_level}")
+                send_private(f"‼️Signal alert incoming ‼️\n💯Get Ready 💯\n5 secs to receiving the signal\nNext ${current_amount} Lvl {martingale_level} Min {get_min_conf()}%")
                 ALERT_SENT = True
                 last_notified = time.time()
                 continue
             if rem in [90, 60, 30] and time.time() - last_notified > 25:
-                send_private(f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
+                send_private(f"⏳ Next session in {cd} MinConf {get_min_conf()}% Get ready!")
                 last_notified = time.time()
         except: time.sleep(2)
 
@@ -337,15 +356,13 @@ threading.Thread(target=scanner, daemon=True).start()
 threading.Thread(target=countdown_notifier, daemon=True).start()
 
 if __name__=="__main__":
-    # Auto set webhook on start
     try:
         bot.remove_webhook()
         time.sleep(1)
-        # Use external URL from Render env
         ext_url = os.getenv("RENDER_EXTERNAL_URL")
         if ext_url:
             bot.set_webhook(url=f"{ext_url}/{TOKEN}")
-            print(f"Webhook set to {ext_url}/{TOKEN[:10]}...", flush=True)
+            print(f"Webhook set {ext_url}", flush=True)
     except Exception as e:
-        print(f"Webhook set err {e}", flush=True)
+        print(f"Webhook err {e}", flush=True)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
