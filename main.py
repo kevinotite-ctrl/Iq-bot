@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask
 import telebot
-print("=== V17.2.3 FULL OTC WEEKEND ===", flush=True)
+print("=== V17.2.4 FULL OTC + BIG SIGNAL + 409 FIX ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -47,7 +47,6 @@ RESUME_AT = time.time()
 NEXT_SCAN_AT = time.time() + 60
 ALERT_SENT = False
 
-# FULL OTC FOR WEEKEND - MORE SIGNALS
 WEEKEND_PAIRS = [
     "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC",
     "AUDUSD-OTC", "EURGBP-OTC", "USDJPY-OTC", "AUDJPY-OTC",
@@ -74,7 +73,8 @@ def send_private(text):
     except: pass
 def send_channel(text):
     try: bot.send_message(CHANNEL_ID, text)
-    except: pass
+    except Exception as e: print(f"CH FAIL {e}", flush=True)
+
 def send_channel_big_signal(pair, direction, conf, reason):
     if direction == "call":
         big_dir = "🟢🟢🟢🟢🟢\n💹 BUY / CALL 💹💹\n🟢🟢🟢🟢🟢\n⬆️⬆️⬆️ GO UP ⬆️⬆️⬆️"
@@ -98,7 +98,7 @@ def send_channel_big_signal(pair, direction, conf, reason):
 🔥🔥🔥🔥🔥🔥
 """
     def delayed():
-        time.sleep(10)
+        time.sleep(10) # 10 sec delay for channel
         send_channel(channel_msg)
         time.sleep(2)
         guide = f"""
@@ -180,8 +180,9 @@ def iq_connect():
         if check:
             Iq.change_balance("PRACTICE")
             return True
-    except: pass
+    except Exception as e: print(f"IQ ERR {e}", flush=True)
     return False
+
 def analyze(pair):
     try:
         candles = Iq.get_candles(pair, 60, 50, time.time())
@@ -202,7 +203,8 @@ iq_connect()
 def home():
     cd,_ = get_countdown()
     pairs = get_pairs()
-    return f"V17.2.3 FULL OTC {len(pairs)} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
+    return f"V17.2.4 409 FIXED {len(pairs)} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} AMT {current_amount} NEXT {cd}"
+
 bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
@@ -215,7 +217,14 @@ def start(m):
     except: bal="?"
     cd,_ = get_countdown()
     pairs = get_pairs()
-    bot.send_message(m.chat.id, f"🤖 V17.2.3 FULL OTC WEEKEND\nPairs: {len(pairs)} {', '.join(pairs[:4])}...\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    bot.send_message(m.chat.id, f"🤖 V17.2.4 409 FIXED\nPairs: {len(pairs)} OTC Active\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\n✅ No more 409!")
+
+@bot.message_handler(commands=['reset'])
+def reset_state(m):
+    global martingale_level, current_amount, OWNER_ID
+    OWNER_ID=m.chat.id
+    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
+    send_private(f"🔄 RESET to $10000 Lvl 0")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -249,21 +258,24 @@ def do_trade():
                 private_msg = f"Bot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
                 send_private(private_msg)
                 send_channel_big_signal(pair, direction, conf, reason)
+
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status: continue
+                # BOUGHT -> ONLY YOU, NOT CHANNEL
                 send_private(f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\n⏳ Wait 125s...")
+
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
                 if profit and profit>0:
                     result = f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next in {cd}"
                     send_private(result); send_private("🤑")
-                    send_channel(result); send_channel("🤑")
+                    send_channel(result); send_channel("🤑") # PROFIT TO CHANNEL TOO
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
                     result = f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}\n⏳ Next in {cd}"
                     send_private(result); send_private("😮‍💨")
-                    send_channel(result); send_channel("😮‍💨")
+                    send_channel(result); send_channel("😮‍💨") # LOSS TO CHANNEL TOO
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
                         send_private(f"⚠️ 10K-15K-20K DONE reset to $10000")
@@ -272,9 +284,10 @@ def do_trade():
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
                         send_private(f"📈 Next ${current_amount} Lvl {martingale_level}")
                     save_state()
+
                 def we_go_again():
                     time.sleep(3)
-                    send_channel("We go again ‼️‼️💯")
+                    send_channel("We go again ‼️‼️💯") # ONLY CHANNEL
                 threading.Thread(target=we_go_again, daemon=True).start()
                 return
             except Exception as e: print(f"BUY ERR {e}", flush=True); continue
@@ -302,17 +315,37 @@ def countdown_notifier():
             if not OWNER_ID or not SCANNING: continue
             cd, rem = get_countdown()
             if rem <= 5 and rem > 0 and not ALERT_SENT:
+                # Alert ONLY YOU
                 send_private(f"‼️Signal alert incoming ‼️\n💯Get Ready 💯\n5 secs to receiving the signal\nNext ${current_amount} Lvl {martingale_level}")
                 ALERT_SENT = True
                 last_notified = time.time()
                 continue
             if rem in [90, 60, 30] and time.time() - last_notified > 25:
+                # Countdown ONLY YOU
                 send_private(f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
                 last_notified = time.time()
         except: time.sleep(2)
 
+# --- ANTI 409 FIX ---
+try:
+    bot.remove_webhook()
+    time.sleep(2)
+    print("Webhook cleared for 409 fix", flush=True)
+except Exception as e:
+    print(f"Webhook clear err {e}", flush=True)
+
+def safe_polling():
+    while True:
+        try:
+            print("Starting bot polling...", flush=True)
+            bot.infinity_polling(none_stop=True, timeout=90, long_polling_timeout=60)
+        except Exception as e:
+            print(f"Polling crashed {e} - retry in 15s", flush=True)
+            time.sleep(15)
+
 threading.Thread(target=scanner, daemon=True).start()
 threading.Thread(target=countdown_notifier, daemon=True).start()
-threading.Thread(target=lambda: bot.infinity_polling(none_stop=True), daemon=True).start()
+threading.Thread(target=safe_polling, daemon=True).start()
+
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
