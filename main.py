@@ -12,7 +12,7 @@ MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
 MIN_CONFIDENCE = 85
 EXPIRY = 2
-SCAN_INTERVAL = 240 # 4 minutes between scans
+SCAN_INTERVAL = 120 # 2 minutes between scans
 
 def load_state():
     global current_amount, martingale_level
