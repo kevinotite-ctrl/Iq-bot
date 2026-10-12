@@ -3,7 +3,7 @@ from flask import Flask
 import telebot
 from telebot import types
 
-print("=== KEVIN TRAILBLAZER BOT V9 FULL CONTROL ===", flush=True)
+print("=== KEVIN TRAILBLAZER BOT V9.1 FIXED ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -25,9 +25,9 @@ try:
     print(f"IQ CONNECT: {check} | {reason}", flush=True)
     if check:
         Iq.change_balance(CURRENT_BALANCE_MODE)
-        print(f"BAL {CURRENT_BALANCE_MODE}: ${Iq.get_balance()}")
+        print(f"BAL {CURRENT_BALANCE_MODE}: ${Iq.get_balance()}", flush=True)
 except Exception as e:
-    print(f"IQ ERROR: {e}")
+    print(f"IQ ERROR: {e}", flush=True)
 
 @app.route('/')
 def home():
@@ -53,6 +53,15 @@ def get_ema(prices, period):
     return ema
 
 bot = telebot.TeleBot(TOKEN)
+# FIX 409 ERROR
+try:
+    bot.delete_webhook()
+    bot.remove_webhook()
+    print("Webhook deleted! Polling mode active", flush=True)
+    time.sleep(1)
+except Exception as e:
+    print(f"Webhook delete error: {e}", flush=True)
+
 PAIRS = ["EURUSD-OTC", "EURUSD", "GBPUSD-OTC"]
 pending_trades = {}
 
