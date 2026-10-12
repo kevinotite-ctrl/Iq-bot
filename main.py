@@ -1,20 +1,19 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.2.5 WEBHOOK 409 PERMANENT FIX ===", flush=True)
+print("=== V17.2.6 10-20-40 WEBHOOK FIX ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
 CHANNEL_ID = -1003709183793
-BASE_AMOUNT = 10000
-MARTINGALE_AMOUNTS = [10000, 15000, 20000]
+BASE_AMOUNT = 10
+MARTINGALE_AMOUNTS = [10, 20, 40]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
-MIN_CONFIDENCE = 85
+MIN_CONFIDENCE = 70
 EXPIRY = 2
 SCAN_INTERVAL = 120
-# YOUR RENDER URL - CHANGE IF NEEDED
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") or "https://your-service-name.onrender.com"
 
 def load_state():
@@ -32,6 +31,7 @@ def load_state():
                 return True
     except: pass
     return False
+
 def save_state():
     try:
         with open(STATE_FILE, 'w') as f:
@@ -62,6 +62,7 @@ WEEKDAY_PAIRS = [
 def get_pairs():
     wd = datetime.datetime.now().weekday()
     return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
+
 def get_countdown():
     remaining = int(NEXT_SCAN_AT - time.time())
     if remaining < 0: remaining = 0
@@ -75,6 +76,7 @@ def send_private(text):
     try:
         if OWNER_ID: bot.send_message(OWNER_ID, text)
     except: pass
+
 def send_channel(text):
     try: bot.send_message(CHANNEL_ID, text)
     except: pass
@@ -139,6 +141,7 @@ def get_rsi(candles, period=14):
         if al==0: return 85
         return 100-(100/(1+ag/al))
     except: return 50
+
 def get_ema(candles, period):
     try:
         closes=[c['close'] for c in candles]
@@ -146,6 +149,7 @@ def get_ema(candles, period):
         for p in closes[1:]: ema=p*k+ema*(1-k)
         return ema
     except: return 0
+
 def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
     try:
         confidence = 64
@@ -174,6 +178,7 @@ def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
             elif last_5[2] > last_5[3] > last_5[4]: confidence += 5
         return min(100, max(60, int(confidence)))
     except: return 80
+
 def iq_connect():
     global Iq
     try:
@@ -185,6 +190,7 @@ def iq_connect():
             return True
     except: pass
     return False
+
 def analyze(pair):
     try:
         candles = Iq.get_candles(pair, 60, 50, time.time())
@@ -202,11 +208,10 @@ def analyze(pair):
 
 iq_connect()
 
-# WEBHOOK ROUTES - FIXES 409
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.5 WEBHOOK LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
+    return f"V17.2.6 10-20-40 LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -228,7 +233,6 @@ def set_webhook():
     except Exception as e:
         return f"Error {e}"
 
-# BOT COMMANDS
 @bot.message_handler(commands=['start'])
 def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, NEXT_SCAN_AT
@@ -238,7 +242,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.5 WEBHOOK FIXED ✅\nPairs: {len(get_pairs())} OTC\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\nNo more 409!")
+    bot.send_message(m.chat.id, f"🤖 V17.2.6 10-20-40 ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -279,7 +283,7 @@ def do_trade():
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
                 if profit and profit>0:
-                    result = f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10000\n⏳ Next in {cd}"
+                    result = f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10\n⏳ Next in {cd}"
                     send_private(result); send_private("🤑")
                     send_channel(result); send_channel("🤑")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
@@ -289,6 +293,8 @@ def do_trade():
                     send_channel(result); send_channel("😮‍💨")
                     martingale_level+=1
                     if martingale_level >= MAX_MARTINGALE:
+                        result_reset = f"🔄 Max martingale reached. Resetting to ${MARTINGALE_AMOUNTS[0]}"
+                        send_private(result_reset)
                         martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
@@ -300,6 +306,7 @@ def do_trade():
                 threading.Thread(target=we_go_again, daemon=True).start()
                 return
             except: continue
+    LAST_SCAN_TIME = time.time()
     LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
     cd,_ = get_countdown()
     try: bal=round(Iq.get_balance(),2)
@@ -328,7 +335,7 @@ def countdown_notifier():
                 ALERT_SENT = True
                 last_notified = time.time()
                 continue
-            if rem in [90, 60, 30] and time.time() - last_notified > 25:
+            if rem in [90][60][30] and time.time() - last_notified > 25:
                 send_private(f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
                 last_notified = time.time()
         except: time.sleep(2)
@@ -337,11 +344,9 @@ threading.Thread(target=scanner, daemon=True).start()
 threading.Thread(target=countdown_notifier, daemon=True).start()
 
 if __name__=="__main__":
-    # Auto set webhook on start
     try:
         bot.remove_webhook()
         time.sleep(1)
-        # Use external URL from Render env
         ext_url = os.getenv("RENDER_EXTERNAL_URL")
         if ext_url:
             bot.set_webhook(url=f"{ext_url}/{TOKEN}")
