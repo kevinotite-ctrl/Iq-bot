@@ -1,6 +1,6 @@
-pyTelegramBotAPI
-pytz
+Flask==2.3.3
+pyTelegramBotAPI==4.14.0
+iqoptionapi==5.2.0
 requests
 websocket-client
-python-dateutil
-git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
+python-dotenv
