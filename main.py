@@ -1,22 +1,20 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.7 FIXED AFTER 5SEC REPORT ===", flush=True)
+print("=== V18.1 $100-200-400 ONLY REAL TRADE TO CHANNEL ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
 CHANNEL_ID = -1003709183793
-BASE_AMOUNT = 10000
-MARTINGALE_AMOUNTS = [10000, 15000, 20000]
+BASE_AMOUNT = 100
+MARTINGALE_AMOUNTS = [100, 200, 400]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
 EXPIRY = 2
 SCAN_INTERVAL = 120
 
-def get_min_conf():
-    wd = datetime.datetime.now().weekday()
-    return 65 if wd >= 5 else 85
+def get_min_conf(): return 70
 
 def load_state():
     global current_amount, martingale_level
@@ -44,11 +42,10 @@ Iq = None
 SCANNING = True
 NEXT_SCAN_AT = time.time() + 60
 ALERT_SENT = False
-WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC"]
-WEEKDAY_PAIRS = ["EURUSD", "GBPUSD"]
+WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "EURJPY-OTC"]
+WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "EURJPY"]
 
 def get_pairs(): return WEEKEND_PAIRS if datetime.datetime.now().weekday()>=5 else WEEKDAY_PAIRS
-
 def get_countdown():
     rem = int(NEXT_SCAN_AT - time.time())
     if rem < 0: rem = 0
@@ -64,13 +61,6 @@ def send_private(text):
 def send_channel(text):
     try: bot.send_message(CHANNEL_ID, text)
     except: pass
-
-def send_channel_big_signal(pair, direction, conf, reason):
-    big_dir = "🟢🟢🟢 CALL / BUY 🟢🟢🟢\n⬆️ GO UP ⬆️" if direction=="call" else "🔴🔴🔴 PUT / SELL 🔴🔴🔴\n⬇️ GO DOWN ⬇️"
-    def delayed():
-        time.sleep(10)
-        send_channel(f"🔥 NEW SIGNAL 🔥\n💰 {pair}\n{big_dir}\n⏰ {EXPIRY} MIN\n🎯 {conf}%\n{reason}\n⚡️ TAKE NOW ⚡️")
-    threading.Thread(target=delayed, daemon=True).start()
 
 def get_rsi(candles, period=14):
     try:
@@ -92,7 +82,7 @@ def get_ema(candles, period):
 
 def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
     try:
-        confidence=64; closes=[c['close'] for c in candles]
+        confidence=70
         gap=abs(ema7-ema21)/ema21*1000
         if gap>0.8: confidence+=18
         elif gap>0.4: confidence+=12
@@ -103,8 +93,8 @@ def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
         else:
             if 30<=rsi<=45: confidence+=18
             else: confidence+=8
-        return min(100, max(60, int(confidence)))
-    except: return 78
+        return min(100, max(70, int(confidence)))
+    except: return 75
 
 def iq_connect():
     global Iq
@@ -112,8 +102,7 @@ def iq_connect():
         from iqoptionapi.stable_api import IQ_Option
         Iq=IQ_Option(EMAIL,PASS); chk,_=Iq.connect()
         if chk: Iq.change_balance("PRACTICE"); return True
-    except Exception as e:
-        print(f"IQ connect fail {e}", flush=True)
+    except: pass
     return False
 
 def analyze(pair):
@@ -127,14 +116,14 @@ def analyze(pair):
         elif close<ema7<ema21 and 25<rsi<50:
             conf=calculate_confidence_2min(candles,ema7,ema21,rsi,"put")
             return "put", f"DOWN EMA7 {round(ema7,5)} < EMA21 RSI {round(rsi,1)}", conf, rsi
-        else: return None,f"RSI {round(rsi,1)} no trend - waiting",0,rsi
-    except Exception as e: return None,f"Error {e}",0,0
+        else: return None,f"RSI {round(rsi,1)} flat",0,rsi
+    except Exception as e: return None,f"Err {e}",0,0
 
 iq_connect()
 
 @app.route('/')
 def home():
-    cd,_=get_countdown(); return f"V17.7 Min {get_min_conf()}% BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
+    cd,_=get_countdown(); return f"V18.1 $100-200-400 70-100% BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -161,52 +150,51 @@ def start(m):
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    cd,_=get_countdown(); min_c=get_min_conf()
-    bot.send_message(m.chat.id, f"🤖 V17.7 FIXED ✅\nMin {min_c}% | {', '.join(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Auto in {cd}\nWill report after 5sec even if no signal!")
+    cd,_=get_countdown()
+    bot.send_message(m.chat.id, f"🤖 V18.1 $100-200-400 ✅\n70-100% 4 PAIRS\nL1 $100 | L2 $200 | L3 $400\nChannel ONLY on real trade\nPairs: {', '.join(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\nNext in {cd}")
 
-@bot.message_handler(commands=['balance'])
-def balance_cmd(m):
-    global OWNER_ID; OWNER_ID=m.chat.id
-    try: bal=round(Iq.get_balance(),2); bot.send_message(m.chat.id, f"💰 Bal ${bal} Next ${current_amount} Lvl {martingale_level}")
-    except: bot.send_message(m.chat.id, "❌ IQ not connected")
-
-@bot.message_handler(commands=['resume'])
-def resume(m):
+@bot.message_handler(commands=['balance','resume','pause','scan'])
+def cmds(m):
     global OWNER_ID, SCANNING, NEXT_SCAN_AT, ALERT_SENT
-    OWNER_ID=m.chat.id; SCANNING=True; NEXT_SCAN_AT=time.time()+60; ALERT_SENT=False; bot.send_message(m.chat.id, "▶️ RESUMED")
-
-@bot.message_handler(commands=['pause'])
-def pause(m):
-    global SCANNING; SCANNING=False; send_private("⏸️ Paused")
-
-@bot.message_handler(commands=['scan'])
-def scan(m):
-    global OWNER_ID; OWNER_ID=m.chat.id; do_trade(is_manual=True)
+    if m.text.startswith('/pause'):
+        SCANNING=False; send_private("⏸️ Paused"); return
+    OWNER_ID=m.chat.id
+    if m.text.startswith('/resume'):
+        SCANNING=True; NEXT_SCAN_AT=time.time()+60; ALERT_SENT=False; bot.send_message(m.chat.id, "▶️ RESUMED $100-200-400")
+    elif m.text.startswith('/balance'):
+        try: bal=round(Iq.get_balance(),2); bot.send_message(m.chat.id, f"💰 Bal ${bal} Next ${current_amount} Lvl {martingale_level}")
+        except: bot.send_message(m.chat.id, "❌ IQ not connected")
+    elif m.text.startswith('/scan'):
+        do_trade(is_manual=True)
 
 def do_trade(is_manual=False):
     global NEXT_SCAN_AT, ALERT_SENT, current_amount, martingale_level
     if not Iq and not iq_connect():
-        send_private("❌ IQ login failed - check EMAIL/PASS"); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
+        send_private("❌ IQ login failed"); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
     if not OWNER_ID: return
-    PAIRS=get_pairs(); min_c=get_min_conf(); last_reason=""
+    PAIRS=get_pairs(); random.shuffle(PAIRS); last_reason=""
     for pair in PAIRS:
         direction, reason, conf, rsi = analyze(pair)
         last_reason = f"{pair}: {reason}"
-        if direction and conf>=min_c:
+        if direction and conf>=70:
             try:
-                send_private(f"Bot confidence >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}")
-                send_channel_big_signal(pair, direction, conf, reason)
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status:
-                    send_private(f"❌ Buy failed {pair} - trying next"); continue
-                send_private(f"✅ BOUGHT {pair} {direction.upper()} ${current_amount}")
+                    send_private(f"❌ Buy FAILED {pair} ${current_amount} - No channel msg")
+                    continue
+                send_private(f"Bot confidence >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}\n✅ AUTO TRADE PLACED!")
+                big_dir = "🟢🟢🟢 CALL / BUY 🟢🟢🟢\n⬆️ GO UP ⬆️" if direction=="call" else "🔴🔴🔴 PUT / SELL 🔴🔴🔴\n⬇️ GO DOWN ⬇️"
+                send_channel(f"🔥 NEW SIGNAL - AUTO TRADED ${current_amount} 🔥\n💰 PAIR: {pair}\n{big_dir}\n⏰ EXPIRY: {EXPIRY} MIN\n🎯 CONF: {conf}% [70-100%]\n💵 Amount: ${current_amount} (L{ martingale_level+1 })\n{reason}\n⚡️ BOT ENTERED LIVE ⚡️")
+                send_private(f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} - Channel notified!")
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 if profit and profit>0:
-                    send_private(f"💰 WIN +${round(profit,2)} {conf}% CORRECT Bal ${round(bal,2)}"); send_channel(f"💰 WIN +${round(profit,2)} {conf}%")
+                    send_private(f"💰 WIN +${round(profit,2)} {conf}% CORRECT Bal ${round(bal,2)}")
+                    send_channel(f"💰 WIN +${round(profit,2)} {pair} {conf}% ✅")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    send_private(f"📉 LOSS -${current_amount} Bal ${round(bal,2)}"); send_channel(f"📉 LOSS -${current_amount}")
+                    send_private(f"📉 LOSS -${current_amount} Bal ${round(bal,2)} Next ${MARTINGALE_AMOUNTS[1] if martingale_level==0 else MARTINGALE_AMOUNTS[2] if martingale_level==1 else MARTINGALE_AMOUNTS[0]}")
+                    send_channel(f"📉 LOSS -${current_amount} {pair} {conf}%")
                     martingale_level+=1
                     if martingale_level>=MAX_MARTINGALE: martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else: current_amount=MARTINGALE_AMOUNTS[martingale_level]
@@ -214,13 +202,10 @@ def do_trade(is_manual=False):
                 return
             except Exception as e:
                 send_private(f"Trade err {e}"); continue
-    # FIXED: ALWAYS REPORT AFTER 5SEC
     NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
     cd,_=get_countdown()
     if is_manual:
-        send_private(f"⏭️ No {min_c}%+ signal in 2 pairs\nLast scan: {last_reason}\nMin {min_c}% needed\n🔄 Auto retry in {cd} | Bal ${Iq.get_balance() if Iq else '?'}")
-    else:
-        send_private(f"⏭️ Scanned {', '.join(get_pairs())} - {last_reason}\nNo {min_c}% setup, retry in {cd}")
+        send_private(f"⏭️ No 70%+ in 4 pairs\nLast: {last_reason}\nRetry {cd}")
 
 def scanner():
     while True:
@@ -239,7 +224,7 @@ def countdown_notifier():
             if not OWNER_ID or not SCANNING: continue
             _, rem = get_countdown()
             if rem <= 5 and rem > 0 and not ALERT_SENT:
-                send_private(f"‼️ Signal alert incoming ‼️\n5 secs to signal\nNext ${current_amount} Min {get_min_conf()}%")
+                send_private(f"‼️ Signal in 5 secs - 4 pairs\nNext ${current_amount} Lvl {martingale_level+1} Min 70%")
                 ALERT_SENT=True
         except: time.sleep(2)
 
