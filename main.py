@@ -16,7 +16,7 @@ MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
 DAILY_FILE = "daily_trades.json"
 EXPIRY = 2
-SCAN_INTERVAL = 120
+SCAN_INTERVAL = 30
 
 OWNER_ID = None
 Iq = None
@@ -288,7 +288,7 @@ def do_trade(is_manual=False):
             except Exception as e:
                 send_private(f"Trade err {e}"); continue
     NEXT_SCAN_AT=time.time()+SCAN_INTERVAL
-    if is_manual: send_private(f"⏭️ No SIMPLE signal\nLast: {last_reason}\nNext 02:00 - Good, avoiding bad trades")
+    if is_manual: send_private(if is_manual: send_private(f"⏭️ No SIMPLE signal\nLast: {last_reason}\nNext 00:30 - Good, avoiding bad trades"))
 
 def scanner():
     while True:
