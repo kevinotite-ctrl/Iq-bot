@@ -1,5 +1,5 @@
-Flask
+iqoptionapi
 pyTelegramBotAPI
+pytz
 requests
-numpy
-git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
+websocket-client
