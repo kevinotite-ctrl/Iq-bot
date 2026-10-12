@@ -2,7 +2,7 @@ import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
 
-print("=== V19.1 BURST FIXED NO ERROR ===", flush=True)
+print("=== V20.1 SIMPLE + DAILY SUMMARY ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -14,154 +14,198 @@ BASE_AMOUNT = 100
 MARTINGALE_AMOUNTS = [100, 200, 400]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
+DAILY_FILE = "daily_trades.json"
 EXPIRY = 2
-SCAN_INTERVAL = 75
+SCAN_INTERVAL = 120
 
 OWNER_ID = None
 Iq = None
 SCANNING = True
-NEXT_SCAN_AT = time.time() + 45
-ALERT_SENT = False
+NEXT_SCAN_AT = time.time() + 60
 current_amount = BASE_AMOUNT
 martingale_level = 0
+DAILY_LOSS = 0
+MAX_DAILY_LOSS = 600
 
 WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "EURJPY-OTC"]
 WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "EURJPY"]
 
 bot = telebot.TeleBot(TOKEN)
 
-def get_min_conf(): return 70
 def get_pairs(): return WEEKEND_PAIRS if datetime.datetime.now().weekday()>=5 else WEEKDAY_PAIRS
 def get_countdown():
     rem = int(NEXT_SCAN_AT - time.time())
-    if rem < 0: rem = 0
     return f"{rem//60:02d}:{rem%60:02d}", rem
 
 def load_state():
     global current_amount, martingale_level
     try:
         if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, 'r') as f:
-                data = json.load(f)
-                martingale_level = data.get('level', 0)
-                current_amount = MARTINGALE_AMOUNTS[martingale_level] if martingale_level < len(MARTINGALE_AMOUNTS) else MARTINGALE_AMOUNTS[0]
+            with open(STATE_FILE,'r') as f:
+                d=json.load(f)
+                martingale_level=d.get('level',0)
+                current_amount=MARTINGALE_AMOUNTS[martingale_level] if martingale_level <3 else 100
     except: pass
 
 def save_state():
     try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump({'level': martingale_level, 'amount': current_amount}, f)
+        with open(STATE_FILE,'w') as f: json.dump({'level':martingale_level}, f)
     except: pass
 
-def send_private(text):
+# DAILY SUMMARY LOGIC
+def get_today_key(): return datetime.datetime.now().strftime("%Y-%m-%d")
+
+def load_daily():
     try:
-        if OWNER_ID: bot.send_message(OWNER_ID, text)
+        if os.path.exists(DAILY_FILE):
+            with open(DAILY_FILE,'r') as f: return json.load(f)
+    except: pass
+    return {}
+
+def save_daily(data):
+    try:
+        with open(DAILY_FILE,'w') as f: json.dump(data,f)
     except: pass
 
-def send_channel(text):
-    try: bot.send_message(CHANNEL_ID, text)
+def log_trade(pair, direction, amount, conf, result, profit):
+    try:
+        data=load_daily()
+        key=get_today_key()
+        if key not in data:
+            data[key]={'trades':[], 'wins':0, 'losses':0, 'profit':0, 'total':0}
+        data[key]['trades'].append({
+            'time': datetime.datetime.now().strftime("%H:%M"),
+            'pair': pair,
+            'dir': direction,
+            'amount': amount,
+            'conf': conf,
+            'result': result,
+            'profit': profit
+        })
+        data[key]['total']+=1
+        if result=='WIN': data[key]['wins']+=1
+        else: data[key]['losses']+=1
+        data[key]['profit']+=profit if profit else -amount if result=='LOSS' else 0
+        save_daily(data)
     except: pass
 
-# ALL INDICATORS DEFINED AT TOP - NO ERROR
-def get_rsi(candles, period=14):
-    try:
-        closes=[c['close'] for c in candles]; gains=[]; losses=[]
-        for i in range(1,len(closes)):
-            d=closes[i]-closes[i-1]; gains.append(max(d,0)); losses.append(max(-d,0))
-        if len(gains)<period: return 50
-        ag=sum(gains[-period:])/period; al=sum(losses[-period:])/period
-        if al==0: return 78
-        return 100-(100/(1+ag/al))
-    except: return 50
+def get_daily_summary(date_key=None):
+    data=load_daily()
+    key=date_key or get_today_key()
+    if key not in data or data[key]['total']==0:
+        return f"📊 No trades on {key}"
+    d=data[key]
+    winrate = round(d['wins']/d['total']*100,1) if d['total']>0 else 0
+    # Build trade list
+    trade_lines=""
+    for t in d['trades'][-10:]: # last 10
+        emoji="✅" if t['result']=='WIN' else "❌"
+        trade_lines+=f"{emoji} {t['time']} {t['pair']} {t['dir']} ${t['amount']} {t['conf']}% {t['result']} {t['profit']:+}\n"
 
-def get_ema(candles, period):
+    summary = f"""📊 DAILY SUMMARY - {key}
+━━━━━━━━━━━━━━━━━━
+💼 Total Trades: {d['total']}
+✅ Wins: {d['wins']}
+❌ Losses: {d['losses']}
+📈 Win Rate: {winrate}%
+💰 Profit: ${round(d['profit'],2)}
+
+📝 Last Trades:
+{trade_lines}
+━━━━━━━━━━━━━━━━━━
+Next: ${current_amount} Lvl {martingale_level+1}"""
+    return summary
+
+def send_private(t):
     try:
-        closes=[c['close'] for c in candles]; ema=closes[0]; k=2/(period+1)
-        for p in closes[1:]: ema=p*k+ema*(1-k)
+        if OWNER_ID: bot.send_message(OWNER_ID, t)
+    except: pass
+def send_channel(t):
+    try: bot.send_message(CHANNEL_ID, t)
+    except: pass
+
+def get_ema(closes, period):
+    try:
+        ema=closes[0]; k=2/(period+1)
+        for c in closes[1:]: ema=c*k+ema*(1-k)
         return ema
     except: return 0
-
-def get_stochastic(candles, k_period=14, d_period=3):
+def get_rsi(closes, period=14):
     try:
-        if len(candles) < k_period: return 50,50,50
-        k_values=[]
-        for i in range(k_period, len(candles)+1):
-            window=candles[i-k_period:i]
-            lows=[c.get('low', c['close']*0.9995) for c in window]
-            highs=[c.get('high', c['close']*1.0005) for c in window]
-            ll=min(lows); hh=max(highs); close=candles[i-1]['close']
-            k=(close-ll)/(hh-ll)*100 if hh!=ll else 50
-            k_values.append(k)
-        k_cur=k_values[-1]; d_cur=sum(k_values[-d_period:])/d_period if len(k_values)>=d_period else sum(k_values)/len(k_values)
-        k_prev=k_values[-2] if len(k_values)>=2 else k_cur
-        return k_cur, d_cur, k_prev
-    except: return 50,50,50
+        gains=[]; losses=[]
+        for i in range(1,len(closes)):
+            d=closes[i]-closes[i-1]
+            gains.append(max(d,0)); losses.append(max(-d,0))
+        if len(gains)<period: return 50
+        ag=sum(gains[-period:])/period; al=sum(losses[-period:])/period
+        if al==0: return 70
+        return 100-(100/(1+ag/al))
+    except: return 50
 
 def iq_connect():
     global Iq
     try:
         from iqoptionapi.stable_api import IQ_Option
         Iq=IQ_Option(EMAIL,PASS)
-        chk,_=Iq.connect()
-        if chk:
+        ok,_=Iq.connect()
+        if ok:
             Iq.change_balance("PRACTICE")
-            print(f"IQ CONNECTED BAL {Iq.get_balance()}", flush=True)
+            print(f"IQ OK {Iq.get_balance()}", flush=True)
             return True
     except Exception as e:
         print(f"IQ FAIL {e}", flush=True)
     return False
 
-def calculate_confidence_burst(ema_gap, k, d, rsi):
-    conf=70
-    if ema_gap>1.0: conf+=15
-    elif ema_gap>0.5: conf+=10
-    elif ema_gap>0.2: conf+=5
-    if 20<=k<=40 or 60<=k<=80: conf+=12
-    if abs(k-d)>3: conf+=8
-    if 45<=rsi<=65: conf+=10
-    return min(100, max(70, int(conf)))
-
-def analyze_burst(pair):
+def analyze_simple(pair):
     try:
-        if Iq is None: return None, "IQ not connected", 0, 0
-        candles=Iq.get_candles(pair,60,50,time.time())
-        if not candles or len(candles)<20: return None,f"No candles {pair}",0,0
-        ema7=get_ema(candles[-15:],7); ema14=get_ema(candles[-20:],14)
-        rsi=get_rsi(candles,14); k,d,k_prev=get_stochastic(candles,14,3)
-        close=candles[-1]['close']; open_p=candles[-1].get('open', close)
-        is_green=close>open_p; is_red=close<open_p
-        ema_gap=abs(ema7-ema14)/ema14*1000 if ema14!=0 else 0
-
-        if ema7>ema14 and k_prev<d and k>d and k<45 and 40<rsi<72 and is_green and ema_gap>0.15:
-            conf=calculate_confidence_burst(ema_gap,k,d,rsi)
-            return "call", f"BURST UP EMA7 {round(ema7,5)} > EMA14 Stoch {round(k,1)} UP {round(d,1)} RSI {round(rsi,1)}", conf, rsi
-        if ema7<ema14 and k_prev>d and k<d and k>55 and 28<rsi<60 and is_red and ema_gap>0.15:
-            conf=calculate_confidence_burst(ema_gap,k,d,rsi)
-            return "put", f"BURST DOWN EMA7 {round(ema7,5)} < EMA14 Stoch {round(k,1)} DOWN {round(d,1)} RSI {round(rsi,1)}", conf, rsi
-        if ema7>ema14 and k>d and 20<k<50 and 42<rsi<70 and is_green:
-            conf=calculate_confidence_burst(ema_gap,k,d,rsi)-5
-            if conf>=70: return "call", f"MOMENTUM UP Stoch {round(k,1)}>{round(d,1)} RSI {round(rsi,1)}", conf, rsi
-        if ema7<ema14 and k<d and 50<k<80 and 30<rsi<58 and is_red:
-            conf=calculate_confidence_burst(ema_gap,k,d,rsi)-5
-            if conf>=70: return "put", f"MOMENTUM DOWN Stoch {round(k,1)}<{round(d,1)} RSI {round(rsi,1)}", conf, rsi
-        return None,f"WAIT Gap {round(ema_gap,2)} K {round(k,1)} D {round(d,1)} RSI {round(rsi,1)}",0,rsi
+        if Iq is None: return None, "No IQ", 0
+        candles=Iq.get_candles(pair,60,60,time.time())
+        if not candles or len(candles)<50: return None, f"No candles {pair}",0
+        closes=[c['close'] for c in candles]
+        ema20=get_ema(closes[-30:],20)
+        ema50=get_ema(closes,50)
+        rsi=get_rsi(closes,14)
+        close=closes[-1]; open_p=candles[-1].get('open',close)
+        high=max(closes[-10:]); low=min(closes[-10:])
+        volatility = (high-low)/close*1000
+        if volatility < 0.4: return None, f"FLAT vol {round(volatility,2)} SKIP", 0
+        ema_gap = abs(ema20-ema50)/ema50*1000
+        if ema_gap < 0.2: return None, f"Weak gap {round(ema_gap,2)} SKIP",0
+        if close>ema20 and ema20>ema50:
+            dist = abs(close-ema20)/close*1000
+            if dist < 0.6 and 45<=rsi<=68 and close>open_p:
+                conf=78
+                if ema_gap>0.8: conf+=10
+                elif ema_gap>0.5: conf+=7
+                if 50<=rsi<=62: conf+=8
+                if dist<0.3: conf+=6
+                conf=min(95,conf)
+                if conf>=75: return "call", f"SIMPLE UP EMA20 {round(ema20,5)} > EMA50 Pullback {round(dist,2)} RSI {round(rsi,1)}", conf
+        if close<ema20 and ema20<ema50:
+            dist = abs(close-ema20)/close*1000
+            if dist < 0.6 and 32<=rsi<=55 and close<open_p:
+                conf=78
+                if ema_gap>0.8: conf+=10
+                elif ema_gap>0.5: conf+=7
+                if 38<=rsi<=50: conf+=8
+                if dist<0.3: conf+=6
+                conf=min(95,conf)
+                if conf>=75: return "put", f"SIMPLE DOWN EMA20 {round(ema20,5)} < EMA50 Pullback {round(dist,2)} RSI {round(rsi,1)}", conf
+        return None, f"WAIT EMA20 {round(ema20,5)} EMA50 {round(ema50,5)} RSI {round(rsi,1)}", 0
     except Exception as e:
-        return None,f"Err {e}",0,0
+        return None, f"Err {e}",0
 
 load_state()
+iq_connect()
 
 @app.route('/')
 def home():
-    cd,_=get_countdown()
-    bal = Iq.get_balance() if Iq else 0
-    return f"V19.1 BURST FIXED 70-100% BAL {bal} NEXT {cd}"
+    cd,_=get_countdown(); bal=Iq.get_balance() if Iq else 0
+    return f"V20.1 SIMPLE+SUMMARY {bal} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    try:
-        json_str=request.get_data().decode('UTF-8')
-        update=telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
+    try: bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('UTF-8'))])
     except: pass
     return "OK",200
 
@@ -170,60 +214,72 @@ def set_webhook():
     try:
         bot.remove_webhook(); time.sleep(1)
         url=f"{os.getenv('RENDER_EXTERNAL_URL')}/{TOKEN}"
-        bot.set_webhook(url=url); return f"Webhook set {url}"
-    except Exception as e: return f"Error {e}"
+        bot.set_webhook(url=url); return f"Set {url}"
+    except Exception as e: return f"Err {e}"
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    global OWNER_ID, NEXT_SCAN_AT, ALERT_SENT
-    OWNER_ID=m.chat.id; NEXT_SCAN_AT=time.time()+45; ALERT_SENT=False
-    load_state()
+    global OWNER_ID, NEXT_SCAN_AT
+    OWNER_ID=m.chat.id; NEXT_SCAN_AT=time.time()+60; load_state()
     if Iq is None: iq_connect()
-    try: bal=round(Iq.get_balance(),2)
-    except: bal="?"
+    bal=round(Iq.get_balance(),2) if Iq else "?"
     cd,_=get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V19.1 BURST FIXED ✅\n70-100% | 4 PAIRS | $100-200-400\nEMA7/14 + Stoch Cross\nPairs: {', '.join(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level+1}\nNext in {cd}")
+    bot.send_message(m.chat.id, f"🤖 V20.1 SIMPLE + SUMMARY ✅\nEMA20+EMA50+RSI Vol Filter\nPairs: {', '.join(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level+1}\nNext in {cd}\n\nCommands:\n/summary - Today report\n/yesterday - Yesterday\n/balance - Balance\n/reset - Reset Lvl")
 
-@bot.message_handler(commands=['balance','resume','pause','scan'])
+@bot.message_handler(commands=['balance','resume','pause','scan','reset','summary','today','yesterday','report','daily'])
 def cmds(m):
-    global OWNER_ID, SCANNING, NEXT_SCAN_AT, ALERT_SENT
-    if m.text.startswith('/pause'):
-        SCANNING=False; send_private("⏸️ Paused"); return
+    global OWNER_ID, SCANNING, NEXT_SCAN_AT, DAILY_LOSS, martingale_level, current_amount
     OWNER_ID=m.chat.id
-    if m.text.startswith('/resume'):
-        SCANNING=True; NEXT_SCAN_AT=time.time()+45; ALERT_SENT=False; bot.send_message(m.chat.id, "▶️ RESUMED BURST")
-    elif m.text.startswith('/balance'):
-        try: bal=round(Iq.get_balance(),2); bot.send_message(m.chat.id, f"💰 Bal ${bal} Next ${current_amount} Lvl {martingale_level+1}")
-        except: bot.send_message(m.chat.id, "❌ IQ not connected - /start")
-    elif m.text.startswith('/scan'):
-        do_trade(is_manual=True)
+    txt=m.text.lower()
+    if '/pause' in txt: SCANNING=False; send_private("⏸️ Paused"); return
+    if '/resume' in txt: SCANNING=True; NEXT_SCAN_AT=time.time()+60; bot.send_message(m.chat.id, "▶️ RESUMED")
+    elif '/balance' in txt:
+        try: bal=round(Iq.get_balance(),2); bot.send_message(m.chat.id, f"💰 Bal ${bal} Next ${current_amount} Daily Loss ${DAILY_LOSS}/{MAX_DAILY_LOSS}\n\n{get_daily_summary()}")
+        except: bot.send_message(m.chat.id, "❌ IQ not connected")
+    elif '/reset' in txt:
+        martingale_level=0; current_amount=100; DAILY_LOSS=0; save_state(); bot.send_message(m.chat.id, "🔄 Reset $100")
+    elif '/scan' in txt: do_trade(is_manual=True)
+    elif 'summary' in txt or 'today' in txt or 'daily' in txt or 'report' in txt:
+        bot.send_message(m.chat.id, get_daily_summary())
+        try:
+            bal=round(Iq.get_balance(),2)
+            bot.send_message(CHANNEL_ID, f"📊 DAILY UPDATE {get_today_key()}\n{get_daily_summary()}\nBal ${bal}")
+        except: pass
+    elif 'yesterday' in txt:
+        y=(datetime.datetime.now()-datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        bot.send_message(m.chat.id, get_daily_summary(y))
 
 def do_trade(is_manual=False):
-    global NEXT_SCAN_AT, ALERT_SENT, current_amount, martingale_level
+    global NEXT_SCAN_AT, current_amount, martingale_level, DAILY_LOSS
     if Iq is None and not iq_connect():
-        send_private("❌ IQ login failed"); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
+        send_private("❌ IQ login failed"); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; return
     if not OWNER_ID: return
+    if DAILY_LOSS >= MAX_DAILY_LOSS:
+        send_private(f"🛑 DAILY STOP ${DAILY_LOSS} reached - /reset to continue"); NEXT_SCAN_AT=time.time()+3600; return
     PAIRS=get_pairs(); random.shuffle(PAIRS); last_reason=""
     for pair in PAIRS:
-        direction, reason, conf, rsi = analyze_burst(pair)
-        last_reason = f"{pair}: {reason}"
-        if direction and conf>=70:
+        direction, reason, conf = analyze_simple(pair)
+        last_reason=f"{pair}: {reason}"
+        if direction and conf>=75:
             try:
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status:
-                    send_private(f"❌ Buy FAILED {pair} ${current_amount} - skip channel"); continue
-                send_private(f"💥 BURST {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level+1} Exp {EXPIRY}min\n{reason}\n✅ TRADE PLACED!")
-                big_dir = "🟢 CALL BURST 🟢\n⬆️ GO UP ⬆️" if direction=="call" else "🔴 PUT BURST 🔴\n⬇️ GO DOWN ⬇️"
-                send_channel(f"🔥 BURST SIGNAL - AUTO TRADED ${current_amount} 🔥\n💰 {pair}\n{big_dir}\n⏰ {EXPIRY} MIN\n🎯 {conf}% [70-100%]\n💵 ${current_amount} (L{ martingale_level+1 })\n📊 {reason}\n⚡️ BOT ENTERED ⚡️")
+                    send_private(f"❌ Buy FAILED {pair} ${current_amount}"); continue
+                send_private(f"✅ SIMPLE {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level+1}\n{reason}")
+                big_dir = "🟢 CALL UP 🟢" if direction=="call" else "🔴 PUT DOWN 🔴"
+                send_channel(f"🔥 SIMPLE ${current_amount} 🔥\n💰 {pair}\n{big_dir}\n⏰ {EXPIRY} MIN\n🎯 {conf}%\n💵 ${current_amount}\n📊 {reason}")
                 time.sleep(125)
-                profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
+                profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL
                 if profit and profit>0:
-                    send_private(f"💰 WIN +${round(profit,2)} {conf}% CORRECT Bal ${round(bal,2)}")
-                    send_channel(f"💰 WIN +${round(profit,2)} {pair} BURST {conf}% ✅")
+                    send_private(f"💰 WIN +${round(profit,2)} {conf}% Bal ${round(bal,2)}")
+                    send_channel(f"💰 WIN +${round(profit,2)} {pair} {conf}% ✅")
+                    log_trade(pair, direction.upper(), current_amount, conf, 'WIN', round(profit,2))
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    send_private(f"📉 LOSS -${current_amount} Bal ${round(bal,2)}")
-                    send_channel(f"📉 LOSS -${current_amount} {pair} BURST {conf}%")
+                    DAILY_LOSS+=current_amount
+                    send_private(f"📉 LOSS -${current_amount} Bal ${round(bal,2)} Daily -${DAILY_LOSS}")
+                    send_channel(f"📉 LOSS -${current_amount} {pair} {conf}%")
+                    log_trade(pair, direction.upper(), current_amount, conf, 'LOSS', -current_amount)
                     martingale_level+=1
                     if martingale_level>=MAX_MARTINGALE: martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
                     else: current_amount=MARTINGALE_AMOUNTS[martingale_level]
@@ -231,10 +287,8 @@ def do_trade(is_manual=False):
                 return
             except Exception as e:
                 send_private(f"Trade err {e}"); continue
-    NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
-    cd,_=get_countdown()
-    if is_manual:
-        send_private(f"⏭️ No 70%+ BURST in 4 pairs\nLast: {last_reason}\nRetry {cd}")
+    NEXT_SCAN_AT=time.time()+SCAN_INTERVAL
+    if is_manual: send_private(f"⏭️ No SIMPLE signal\nLast: {last_reason}\nNext 02:00 - Good, avoiding bad trades")
 
 def scanner():
     while True:
@@ -242,34 +296,37 @@ def scanner():
             time.sleep(2)
             if not OWNER_ID or not SCANNING: continue
             if time.time() < NEXT_SCAN_AT: continue
-            do_trade(is_manual=False)
+            do_trade(False)
         except: time.sleep(5)
 
-def countdown_notifier():
-    global ALERT_SENT
+def daily_auto_reporter():
+    sent_today=""
     while True:
         try:
-            time.sleep(1)
-            if not OWNER_ID or not SCANNING: continue
-            _, rem = get_countdown()
-            if rem <= 5 and rem > 0 and not ALERT_SENT:
-                send_private(f"‼️ BURST in 5 secs\nNext ${current_amount} Lvl {martingale_level+1} Min 70%")
-                ALERT_SENT=True
-        except: time.sleep(2)
+            time.sleep(60)
+            now=datetime.datetime.now()
+            # Auto send at 23:59 Lagos time
+            if now.hour==23 and now.minute==59 and get_today_key()!=sent_today:
+                if OWNER_ID:
+                    summary=get_daily_summary()
+                    send_private(f"🌙 END OF DAY AUTO SUMMARY\n{summary}")
+                    send_channel(f"🌙 END OF DAY - {get_today_key()}\n{summary}")
+                    sent_today=get_today_key()
+            # Reset DAILY_LOSS at midnight
+            if now.hour==0 and now.minute==0:
+                global DAILY_LOSS
+                DAILY_LOSS=0
+        except: time.sleep(60)
 
-# START THREADS AND CONNECT ONLY ONCE
 threading.Thread(target=scanner, daemon=True).start()
-threading.Thread(target=countdown_notifier, daemon=True).start()
-
-# Connect safely after definition
-try:
-    iq_connect()
+threading.Thread(target=daily_auto_reporter, daemon=True).start()
+try: iq_connect()
 except: pass
 
 if __name__=="__main__":
     try:
         bot.remove_webhook(); time.sleep(1)
-        ext_url=os.getenv("RENDER_EXTERNAL_URL")
-        if ext_url: bot.set_webhook(url=f"{ext_url}/{TOKEN}")
+        ext=os.getenv("RENDER_EXTERNAL_URL")
+        if ext: bot.set_webhook(url=f"{ext}/{TOKEN}")
     except: pass
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
