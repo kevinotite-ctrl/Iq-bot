@@ -1,5 +1,5 @@
-iqoptionapi
-pyTelegramBotAPI
-pytz
-requests
-websocket-client
+pyTelegramBotAPI==4.14.0
+pytz==2024.1
+requests==2.31.0
+websocket-client==1.6.4
+git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
