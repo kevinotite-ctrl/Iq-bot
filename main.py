@@ -16,7 +16,14 @@ except:
 # ========== CONFIG ==========
 IQ_EMAIL = "YOUR_IQ_EMAIL"
 IQ_PASSWORD = "YOUR_IQ_PASSWORD"
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_TOKEN = "8976204524:AAEcQXl3F1Tsu7YigXr3oBYar8MPe1PHVFo"
+
+
+Use this token to access the HTTP API:
+8976204524:AAEcQXl3F1Tsu7YigXr3oBYar8MPe1PHVFo
+Keep your token secure and store it safely, it can be used by anyone to control your bot.
+
+For a description of the Bot API, see this page: https://core.telegram.org/bots/api"
 PRIVATE_CHAT_ID = 123456789
 CHANNEL_ID = "@KEVINTRAILBLAZE"
 
