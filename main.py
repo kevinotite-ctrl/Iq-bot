@@ -2,7 +2,7 @@ import os, time, threading, random, datetime, requests
 from flask import Flask
 import telebot
 
-print("=== KEVIN V16 FIX 409 CONFLICT ===", flush=True)
+print("=== KEVIN V17 LOCK FIX - FINAL ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -11,6 +11,7 @@ PASS = os.getenv("IQ_PASSWORD")
 
 BASE_AMOUNT=10; MAX_MARTINGALE=3; current_amount=10; martingale_level=0
 OWNER_ID=None; Iq=None; SCANNING=True; LAST_SIGNAL=0; RESUME_AT=time.time()
+IQ_LOCK = threading.Lock() # <-- FIXES YOUR BUY ERR
 BOT_RUNNING=False
 
 WEEKEND_PAIRS=["EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC"]
@@ -21,28 +22,20 @@ def get_pairs():
 
 def delete_webhook():
     try:
-        # Kill everything
         requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
-        b=telebot.TeleBot(TOKEN)
-        b.remove_webhook()
-        print("✅ WEBHOOK + PENDING DELETED", flush=True)
-        time.sleep(3)
-    except Exception as e: print(f"delhook err {e}", flush=True)
+        b=telebot.TeleBot(TOKEN); b.remove_webhook()
+        print("✅ WEBHOOK DELETED", flush=True)
+        time.sleep(2)
+    except: pass
 
 def get_rsi(candles,p=14):
     try:
-        closes=[c['close'] for c in candles]; g=[]; l=[]
-        for i in range(1,len(closes)):
-            d=c[closes[i]-c[i-1]] if False else None
-            d=closes[i]-closes[i-1] if False else closes[i]-closes[i-1]
-        # simple calc
         closes=[c['close'] for c in candles]
-        gains=[]; losses=[]
+        g=[]; l=[]
         for i in range(1,len(closes)):
-            d=closes[i]-closes[i-1]
-            gains.append(max(d,0)); losses.append(max(-d,0))
-        if len(gains)<p: return 50
-        ag=sum(gains[-p:])/p; al=sum(losses[-p:])/p
+            d=closes[i]-closes[i-1]; g.append(max(d,0)); l.append(max(-d,0))
+        if len(g)<p: return 50
+        ag=sum(g[-p:])/p; al=sum(l[-p:])/p
         return 70 if al==0 else 100-(100/(1+ag/al))
     except: return 50
 
@@ -55,33 +48,47 @@ def get_ema(candles,period):
 
 def iq_connect_force():
     global Iq
-    if Iq:
-        try: Iq.close()
-        except: pass
-        Iq=None
-    time.sleep(3)
-    try:
-        from iqoptionapi.stable_api import IQ_Option
-        print(f"CONNECTING IQ {EMAIL}...", flush=True)
-        Iq=IQ_Option(EMAIL,PASS)
-        ok,_=Iq.connect()
-        if ok:
-            time.sleep(5)
-            try: Iq.change_balance("PRACTICE")
+    with IQ_LOCK: # LOCK HERE
+        if Iq:
+            try: Iq.close()
             except: pass
-            print(f"IQ BAL {Iq.get_balance()}", flush=True)
-            return True
-        return False
-    except Exception as e:
-        print(f"IQ ERR {e}", flush=True)
-        return False
+            Iq=None
+        time.sleep(2)
+        try:
+            from iqoptionapi.stable_api import IQ_Option
+            print(f"CONNECTING IQ {EMAIL}...", flush=True)
+            Iq=IQ_Option(EMAIL,PASS)
+            ok,reason=Iq.connect()
+            print(f"IQ CONNECT {ok} {reason}", flush=True)
+            if ok:
+                time.sleep(5)
+                try: Iq.change_balance("PRACTICE")
+                except: pass
+                print(f"IQ BAL {Iq.get_balance()}", flush=True)
+                # Warm candles
+                try: Iq.get_candles("EURUSD-OTC",60,5,time.time())
+                except: pass
+                time.sleep(1)
+                return True
+            return False
+        except Exception as e:
+            print(f"IQ ERR {e}", flush=True)
+            return False
 
 def get_candles_safe(pair):
-    for _ in range(3):
+    global Iq
+    for attempt in range(3):
         try:
-            c=Iq.get_candles(pair,60,50,time.time())
-            if c and len(c)>=20: return c
-        except: pass
+            with IQ_LOCK:
+                if Iq is None:
+                    print("Iq is None in get_candles_safe", flush=True)
+                    raise Exception("Iq None")
+                candles=Iq.get_candles(pair,60,50,time.time())
+            if candles and len(candles)>=20:
+                return candles
+        except Exception as e:
+            print(f"get_candles retry {pair} {e}", flush=True)
+        # Reconnect outside lock to avoid deadlock
         iq_connect_force()
         time.sleep(3)
     return None
@@ -94,7 +101,6 @@ def analyze(pair):
     elif close<ema7<ema21 and 25<rsi<45: return "put", f"DOWN RSI {round(rsi,1)}"
     else: return None, f"SKIP RSI {round(rsi,1)}"
 
-# DELETE WEBHOOK BEFORE ANYTHING
 delete_webhook()
 bot=telebot.TeleBot(TOKEN, threaded=False)
 
@@ -102,7 +108,7 @@ bot=telebot.TeleBot(TOKEN, threaded=False)
 def home():
     try: b=round(Iq.get_balance(),2) if Iq else "NO IQ"
     except: b="?"
-    return f"V16 FIX 409 BAL {b} AMT {current_amount} RUNNING {BOT_RUNNING}"
+    return f"V17 LOCK FIX BAL {b} AMT {current_amount}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def wh(): delete_webhook(); return "DELETED",200
@@ -112,9 +118,8 @@ def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, current_amount, martingale_level
     OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; current_amount=BASE_AMOUNT; martingale_level=0
     if not iq_connect_force():
-        bot.send_message(m.chat.id, "❌ IQ login failed")
-        return
-    bot.send_message(m.chat.id, f"🤖 V16 FIXED 409\n✅ No more conflict\nBal ${Iq.get_balance()}\n/resume /pause /balance")
+        bot.send_message(m.chat.id, "❌ IQ login failed"); return
+    bot.send_message(m.chat.id, f"🤖 V17 LOCK FIX\n✅ BUY ERR fixed\n✅ Socket closed fixed\nBal ${Iq.get_balance()}\n/resume /pause /balance")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -138,21 +143,35 @@ def scan(m): global OWNER_ID; OWNER_ID=m.chat.id; threading.Thread(target=do_tra
 def do_trade():
     global LAST_SIGNAL, current_amount, martingale_level
     if not OWNER_ID: return
-    print("=== TRADE CYCLE FORCE RECONNECT ===", flush=True)
-    iq_connect_force()
+    print("=== TRADE CYCLE ===", flush=True)
+    # Don't reconnect here if already connected, use safe
+    if Iq is None:
+        iq_connect_force()
     PAIRS=get_pairs(); random.shuffle(PAIRS)
+    print(f"SCANNING {PAIRS}", flush=True)
+    try: bot.send_message(OWNER_ID, f"🔍 Scanning {', '.join(PAIRS)}...")
+    except: pass
     for pair in PAIRS:
         direction, reason=analyze(pair)
         print(f"ANALYZE {pair} {direction} {reason}", flush=True)
         if direction:
             try:
-                ok,tid=Iq.buy(current_amount,pair,direction,1)
-                if not ok: continue
+                with IQ_LOCK: # LOCK FOR BUY
+                    if Iq is None:
+                        raise Exception("Iq None before buy")
+                    status,tid=Iq.buy(current_amount,pair,direction,1)
+                if not status:
+                    print(f"BUY FAILED {status} {tid}", flush=True)
+                    continue
                 bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} {reason}")
                 time.sleep(65)
-                profit=Iq.check_win_v3(tid); bal=Iq.get_balance(); LAST_SIGNAL=time.time()
+                with IQ_LOCK:
+                    profit=Iq.check_win_v3(tid)
+                    bal=Iq.get_balance()
+                LAST_SIGNAL=time.time()
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bal ${round(bal,2)} Reset"); current_amount=BASE_AMOUNT; martingale_level=0
+                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bal ${round(bal,2)} Reset")
+                    current_amount=BASE_AMOUNT; martingale_level=0
                 else:
                     martingale_level+=1
                     if martingale_level>=MAX_MARTINGALE:
@@ -161,7 +180,10 @@ def do_trade():
                         current_amount=BASE_AMOUNT*(2**martingale_level)
                         bot.send_message(OWNER_ID,f"📉 LOSS Next ${current_amount} Lvl {martingale_level} Bal ${round(bal,2)}")
                 return
-            except Exception as e: print(f"BUY ERR {e}", flush=True); continue
+            except Exception as e:
+                print(f"BUY ERR {e}", flush=True)
+                # Don't reconnect inside lock
+                continue
     LAST_SIGNAL=time.time()
     bot.send_message(OWNER_ID,f"⏭️ No signal Amt ${current_amount}")
 
@@ -176,29 +198,21 @@ def scanner_loop():
 
 def polling_loop():
     global BOT_RUNNING
-    if BOT_RUNNING:
-        print("Polling already running, skipping", flush=True)
-        return
+    if BOT_RUNNING: return
     BOT_RUNNING=True
-    print("🔄 Starting SINGLE polling loop", flush=True)
     delete_webhook()
     time.sleep(2)
     while True:
         try:
-            # SINGLE POLLING - NO CONFLICT
             bot.infinity_polling(none_stop=True, timeout=90, long_polling_timeout=90, skip_pending=True)
         except Exception as e:
             err=str(e).lower()
-            if "409" in err or "conflict" in err:
-                print(f"409 CONFLICT - deleting webhook and waiting 15s {e}", flush=True)
-                delete_webhook()
-                time.sleep(15)
+            if "409" in err:
+                print("409 waiting 15s", flush=True); delete_webhook(); time.sleep(15)
             else:
-                print(f"Polling restart {e}", flush=True)
-                time.sleep(5)
+                print(f"Polling err {e}", flush=True); time.sleep(5)
 
 threading.Thread(target=scanner_loop, daemon=True).start()
-# ONLY ONE POLLING THREAD
 threading.Thread(target=polling_loop, daemon=True).start()
 
 if __name__=="__main__":
