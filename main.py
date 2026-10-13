@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.2.8 3-PAIRS 50-100% FIX ===", flush=True)
+print("=== V17.2.9 TRADE-FIRST 3-PAIRS 50-100% ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -207,7 +207,7 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.8 3-PAIRS 50-100% LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
+    return f"V17.2.9 TRADE-FIRST LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -238,7 +238,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.8 3-PAIRS 50-100% ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    bot.send_message(m.chat.id, f"🤖 V17.2.9 TRADE-FIRST ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -269,12 +269,18 @@ def do_trade():
         if direction:
             if conf < MIN_CONFIDENCE: continue
             try:
-                private_msg = f"Bot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
+                # 1. PLACE TRADE FIRST - ONLY SEND IF SUCCESS
+                status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
+                if not status:
+                    send_private(f"⚠️ Failed to place {pair} {direction.upper()} Conf {conf}% - trying next pair")
+                    continue
+
+                # 2. TRADE SUCCESS - NOW SEND PRIVATE + CHANNEL (10 sec delay)
+                private_msg = f"✅ TRADE PLACED {pair} {direction.upper()}\nBot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
                 send_private(private_msg)
                 send_channel_big_signal(pair, direction, conf, reason)
-                status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
-                if not status: continue
-                send_private(f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} Lvl {martingale_level} Conf {conf}% Exp {EXPIRY}min\n⏳ Wait 125s...")
+
+                send_private(f"⏳ Wait 125s for result...")
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
@@ -301,7 +307,9 @@ def do_trade():
                     send_channel("We go again ‼️‼️💯")
                 threading.Thread(target=we_go_again, daemon=True).start()
                 return
-            except: continue
+            except Exception as e:
+                send_private(f"Error {e}")
+                continue
     LAST_SCAN_TIME = time.time()
     LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
     cd,_ = get_countdown()
