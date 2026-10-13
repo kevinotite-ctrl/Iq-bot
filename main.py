@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.2.9 TRADE-FIRST 3-PAIRS 50-100% ===", flush=True)
+print("=== V17.4.0 NO CONF + RSI 30-70 ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -11,7 +11,6 @@ BASE_AMOUNT = 10
 MARTINGALE_AMOUNTS = [10, 20, 40]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
-MIN_CONFIDENCE = 50
 EXPIRY = 2
 SCAN_INTERVAL = 120
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") or "https://your-service-name.onrender.com"
@@ -77,7 +76,7 @@ def send_channel(text):
     try: bot.send_message(CHANNEL_ID, text)
     except: pass
 
-def send_channel_big_signal(pair, direction, conf, reason):
+def send_channel_big_signal(pair, direction, reason):
     if direction == "call":
         big_dir = "🟢🟢🟢🟢🟢\n💹 BUY / CALL 💹💹\n🟢🟢🟢🟢🟢\n⬆️⬆️⬆️ GO UP ⬆️⬆️⬆️"
     else:
@@ -91,7 +90,6 @@ def send_channel_big_signal(pair, direction, conf, reason):
 {big_dir}
 
 ⏰ EXPIRY: {EXPIRY} MINUTES
-🎯 CONFIDENCE: {conf}% 💯
 💵 AMOUNT: At your own risk 💰
 
 {reason}
@@ -113,7 +111,6 @@ def send_channel_big_signal(pair, direction, conf, reason):
 {"🟢 GREEN BUTTON (CALL) 🟢" if direction=="call" else "🔴 RED BUTTON (PUT) 🔴"}
 
 ⚠️ Trade immediately after signal!
-💯 Bot confidence {conf}%
 
 👇 Example below 👇
 """
@@ -134,7 +131,7 @@ def get_rsi(candles, period=14):
             gains.append(max(d,0)); losses.append(max(-d,0))
         if len(gains)<period: return 50
         ag=sum(gains[-period:])/period; al=sum(losses[-period:])/period
-        if al==0: return 85
+        if al==0: return 50
         return 100-(100/(1+ag/al))
     except: return 50
 
@@ -145,35 +142,6 @@ def get_ema(candles, period):
         for p in closes[1:]: ema=p*k+ema*(1-k)
         return ema
     except: return 0
-
-def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
-    try:
-        confidence = 50
-        closes=[c['close'] for c in candles]
-        gap = abs(ema7-ema21) / ema21 * 1000
-        if gap > 1.2: confidence += 20
-        elif gap > 0.8: confidence += 15
-        elif gap > 0.4: confidence += 9
-        elif gap > 0.2: confidence += 5
-        if direction=="call":
-            if 62 <= rsi <= 67: confidence += 18
-            elif 60 <= rsi <= 70: confidence += 12
-            elif 56 <= rsi <= 73: confidence += 6
-        else:
-            if 33 <= rsi <= 38: confidence += 18
-            elif 30 <= rsi <= 40: confidence += 12
-            elif 27 <= rsi <= 43: confidence += 6
-        last_5 = closes[-5:]
-        if direction=="call":
-            if last_5[0] < last_5[1] < last_5[2] < last_5[3] < last_5[4]: confidence += 14
-            elif last_5[1] < last_5[2] < last_5[3] < last_5[4]: confidence += 9
-            elif last_5[2] < last_5[3] < last_5[4]: confidence += 5
-        else:
-            if last_5[0] > last_5[1] > last_5[2] > last_5[3] > last_5[4]: confidence += 14
-            elif last_5[1] > last_5[2] > last_5[3] > last_5[4]: confidence += 9
-            elif last_5[2] > last_5[3] > last_5[4]: confidence += 5
-        return min(100, max(50, int(confidence)))
-    except: return 70
 
 def iq_connect():
     global Iq
@@ -190,24 +158,23 @@ def iq_connect():
 def analyze(pair):
     try:
         candles = Iq.get_candles(pair, 60, 50, time.time())
-        if not candles or len(candles)<25: return None, "No candles", 0
+        if not candles or len(candles)<25: return None, "No candles"
         ema7=get_ema(candles[-15:],7); ema21=get_ema(candles,21); rsi=get_rsi(candles,14); close=candles[-1]['close']
-        if close>ema7>ema21 and 56<rsi<73:
-            conf = calculate_confidence_2min(candles, ema7, ema21, rsi, "call")
-            return "call", f"2-MIN UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
-        elif close<ema7<ema21 and 27<rsi<44:
-            conf = calculate_confidence_2min(candles, ema7, ema21, rsi, "put")
-            return "put", f"2-MIN DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}", conf
+        # RSI 30-70 FOR BOTH DIRECTIONS
+        if close>ema7>ema21 and 30<rsi<70:
+            return "call", f"UP TREND EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)} (30-70)"
+        elif close<ema7<ema21 and 30<rsi<70:
+            return "put", f"DOWN TREND EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)} (30-70)"
         else:
-            return None, f"SKIP RSI {round(rsi,1)}", 0
-    except: return None, f"Err", 0
+            return None, f"SKIP RSI {round(rsi,1)}"
+    except: return None, f"Err"
 
 iq_connect()
 
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.9 TRADE-FIRST LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
+    return f"V17.4.0 RSI 30-70 LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -238,7 +205,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.9 TRADE-FIRST ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    bot.send_message(m.chat.id, f"🤖 V17.4.0 RSI 30-70 ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -264,33 +231,34 @@ def do_trade():
         LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
     if not OWNER_ID: return
     PAIRS=get_pairs(); random.shuffle(PAIRS)
+    found_signal = False
     for pair in PAIRS:
-        direction, reason, conf = analyze(pair)
+        direction, reason = analyze(pair)
         if direction:
-            if conf < MIN_CONFIDENCE: continue
+            found_signal = True
             try:
-                # 1. PLACE TRADE FIRST - ONLY SEND IF SUCCESS
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status:
-                    send_private(f"⚠️ Failed to place {pair} {direction.upper()} Conf {conf}% - trying next pair")
+                    try: error_msg = str(trade_id) if trade_id else "Asset closed"
+                    except: error_msg = "Unknown"
+                    send_private(f"⚠️ {pair} {direction.upper()} found but IQ rejected: {error_msg}\nTrying next...")
                     continue
 
-                # 2. TRADE SUCCESS - NOW SEND PRIVATE + CHANNEL (10 sec delay)
-                private_msg = f"✅ TRADE PLACED {pair} {direction.upper()}\nBot confidence rate >> {conf}% 💯\n💯 {pair} {direction.upper()} {conf}% | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
+                private_msg = f"✅ TRADE PLACED {pair} {direction.upper()}\n💯 {pair} {direction.upper()} | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
                 send_private(private_msg)
-                send_channel_big_signal(pair, direction, conf, reason)
+                send_channel_big_signal(pair, direction, reason)
 
                 send_private(f"⏳ Wait 125s for result...")
                 time.sleep(125)
                 profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
                 cd,_ = get_countdown()
                 if profit and profit>0:
-                    result = f"💰 WIN +${round(profit,2)} Bot confidence rate >> {conf}% CORRECT 💯\nBal ${round(bal,2)}\n🔄 Reset to $10\n⏳ Next in {cd}"
+                    result = f"💰 WIN +${round(profit,2)} ✅\nBal ${round(bal,2)}\n🔄 Reset to $10\n⏳ Next in {cd}"
                     send_private(result); send_private("🤑")
                     send_channel(result); send_channel("🤑")
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    result = f"📉 LOSS -${current_amount} Bot confidence rate >> {conf}% FAILED\nBal ${round(bal,2)}\n⏳ Next in {cd}"
+                    result = f"📉 LOSS -${current_amount} ❌\nBal ${round(bal,2)}\n⏳ Next in {cd}"
                     send_private(result); send_private("😮‍💨")
                     send_channel(result); send_channel("😮‍💨")
                     martingale_level+=1
@@ -310,12 +278,15 @@ def do_trade():
             except Exception as e:
                 send_private(f"Error {e}")
                 continue
-    LAST_SCAN_TIME = time.time()
+
     LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
     cd,_ = get_countdown()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    send_private(f"⏭️ No 50-100% signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
+    if found_signal:
+        send_private(f"⚠️ Signal found but all buys failed | Bal ${bal}\n⏳ Next in {cd}")
+    else:
+        send_private(f"⏭️ No RSI 30-70 signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
 
 def scanner():
     while True:
