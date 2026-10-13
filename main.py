@@ -11,7 +11,7 @@ BASE_AMOUNT = 10
 MARTINGALE_AMOUNTS = [10, 20, 40]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
-EXPIRY = 2
+EXPIRY = 1
 SCAN_INTERVAL = 120
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") or "https://your-service-name.onrender.com"
 
