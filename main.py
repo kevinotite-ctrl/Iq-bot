@@ -49,16 +49,9 @@ NEXT_SCAN_AT = time.time() + 60
 ALERT_SENT = False
 
 WEEKEND_PAIRS = [
-    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC",
-    "AUDUSD-OTC", "EURGBP-OTC", "USDJPY-OTC", "AUDJPY-OTC",
-    "GBPCHF-OTC", "EURCHF-OTC", "USDCHF-OTC", "NZDUSD-OTC"
-]
+    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC"]
 WEEKDAY_PAIRS = [
-    "EURUSD", "GBPUSD", "EURJPY", "USDJPY", "AUDUSD", "USDCAD",
-    "EURGBP", "USDCHF", "NZDUSD",
-    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC"
-]
-
+    "EURUSD", "GBPUSD"]
 def get_pairs():
     wd = datetime.datetime.now().weekday()
     return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
