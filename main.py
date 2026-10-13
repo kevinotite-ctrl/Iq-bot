@@ -6,7 +6,7 @@ for l in ["", "root", "iqoptionapi", "iqoptionapi.stable_api"]:
     except: pass
 from flask import Flask
 import telebot
-print("=== KEVIN V22 FIX NoneType ===", flush=True)
+print("=== KEVIN V22 EMOJI REPLIES ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -61,14 +61,12 @@ def iq_connect_force():
             return False
         except Exception as e:
             print(f"IQ ERR {e}", flush=True); return False
-
 def get_open_pairs():
     try:
         with IQ_LOCK:
             if Iq is None: return WEEKEND_PAIRS
             all_open=Iq.get_all_open_time()
         if not all_open or not isinstance(all_open, dict):
-            print(f"get_all_open_time None, fallback OTC", flush=True)
             return WEEKEND_PAIRS
         open_dict=all_open.get('turbo', {}) or all_open.get('binary', {}) or {}
         if not open_dict: return WEEKEND_PAIRS
@@ -79,12 +77,9 @@ def get_open_pairs():
             if isinstance(data, dict) and data.get('open'): open_pairs.append(p)
             elif data is True: open_pairs.append(p)
         if not open_pairs: return WEEKEND_PAIRS
-        print(f"✅ OPEN PAIRS: {open_pairs}", flush=True)
         return open_pairs
-    except Exception as e:
-        print(f"get_open_pairs err {e} fallback", flush=True)
+    except:
         return WEEKEND_PAIRS
-
 def get_candles_safe(pair):
     global Iq
     for _ in range(3):
@@ -93,20 +88,19 @@ def get_candles_safe(pair):
                 if Iq is None: raise Exception("Iq None")
                 c=Iq.get_candles(pair,60,50,time.time())
             if c and len(c)>=20: return c
-        except Exception as e:
-            print(f"candles retry {pair} {e}", flush=True)
+        except: pass
         iq_connect_force(); time.sleep(2)
     return None
 def analyze_loose(pair):
     candles=get_candles_safe(pair)
     if not candles: return None,"No candles"
     ema7=get_ema(candles[-15:],7); rsi=get_rsi(candles,14); close=candles[-1]['close']
-    if close>ema7 and 40<rsi<85: return "call",f"UP RSI {round(rsi,1)}"
-    elif close<ema7 and 15<rsi<60: return "put",f"DOWN RSI {round(rsi,1)}"
+    if close>ema7 and 40<rsi<85: return "call",f"UP 📈 RSI {round(rsi,1)}"
+    elif close<ema7 and 15<rsi<60: return "put",f"DOWN 📉 RSI {round(rsi,1)}"
     else:
-        if rsi>52: return "call",f"LOOSE UP RSI {round(rsi,1)}"
-        elif rsi<48: return "put",f"LOOSE DOWN RSI {round(rsi,1)}"
-        return None,f"SKIP RSI {round(rsi,1)}"
+        if rsi>52: return "call",f"LOOSE UP 🚀 RSI {round(rsi,1)}"
+        elif rsi<48: return "put",f"LOOSE DOWN 🧸 RSI {round(rsi,1)}"
+        return None,f"SKIP 💤 RSI {round(rsi,1)}"
 delete_webhook()
 bot=telebot.TeleBot(TOKEN, threaded=False)
 @app.route('/')
@@ -114,24 +108,33 @@ def home():
     try:
         with IQ_LOCK: b=Iq.get_balance() if Iq else "NO IQ"
     except: b="?"
-    return f"V22 FIX BAL {b}"
+    return f"V22 EMOJI BAL {b}"
 @app.route(f'/{TOKEN}', methods=['POST'])
 def wh(): delete_webhook(); return "DELETED",200
+
 @bot.message_handler(commands=['start'])
 def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, current_amount, martingale_level
     OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; current_amount=BASE_AMOUNT; martingale_level=0
-    bot.send_message(m.chat.id,"🔄 V22 Connecting...")
-    if not iq_connect_force(): bot.send_message(m.chat.id,"❌ IQ fail"); return
+    bot.send_message(m.chat.id,"🔄 ⏳ Connecting to IQ Option... please wait 🤖")
+    if not iq_connect_force():
+        bot.send_message(m.chat.id,"❌ 😭 IQ login failed! Check EMAIL/PASS in Render ⚙️")
+        return
     open_pairs=get_open_pairs()
-    bot.send_message(m.chat.id,f"🤖 V22 FIXED NoneType\nOpen: {', '.join(open_pairs)}\nBal ${Iq.get_balance()}\n/testbuy /scan /balance")
+    bot.send_message(m.chat.id,f"✨ 🤖 KEVIN V22 ONLINE ✨\n\n💰 Balance: ${Iq.get_balance()}\n📊 Open Markets: {', '.join(open_pairs[:4])} 🔥\n\n🎮 Commands:\n🚀 /scan - Force scan now\n🧪 /testbuy - Test $10 trade\n💳 /balance - Check balance\n⏸️ /pause - Pause bot\n▶️ /resume - Resume bot\n\n🔔 Bot will auto-trade every 3 mins ⏰")
+
 @bot.message_handler(commands=['resume'])
 def resume(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, SCANNING
     OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
-    iq_connect_force(); bot.send_message(m.chat.id,f"▶️ RESUMED Amt ${current_amount}")
+    iq_connect_force()
+    bot.send_message(m.chat.id,f"▶️ ✅ Resumed! 🚀\n💵 Amount: ${current_amount}\n🔍 Scanning OTC... 👀")
+
 @bot.message_handler(commands=['pause'])
-def pause(m): global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
+def pause(m):
+    global SCANNING; SCANNING=False
+    bot.send_message(m.chat.id,"⏸️ 🛌 Bot paused! Sleeping... 😴\nSend /resume to wake me up! ☀️")
+
 @bot.message_handler(commands=['balance','status'])
 def status(m):
     global OWNER_ID; OWNER_ID=m.chat.id
@@ -141,15 +144,20 @@ def status(m):
             iq_connect_force()
             with IQ_LOCK: bal=Iq.get_balance()
         open_pairs=get_open_pairs()
-        bot.send_message(m.chat.id,f"BAL ${round(bal,2)} AMT ${current_amount} LVL {martingale_level}\nOpen: {', '.join(open_pairs[:5])}")
+        bot.send_message(m.chat.id,f"💳 💰 WALLET 💰 💳\n\n💵 Balance: ${round(bal,2)} 💎\n💸 Trade Amount: ${current_amount} 🎯\n📈 Level: {martingale_level} / {MAX_MARTINGALE} 🪜\n\n📊 Open Now: {', '.join(open_pairs[:5])} ✅\n\n🤖 Status: {'🟢 Active' if SCANNING else '🔴 Paused'}")
     except Exception as e:
-        bot.send_message(m.chat.id,f"BAL $9989 cache AMT ${current_amount} LVL {martingale_level}\nErr {e}"); iq_connect_force()
+        bot.send_message(m.chat.id,f"💳 Wallet (cached) 😅\n💵 ${current_amount} Lvl {martingale_level}\n🔄 Reconnecting... 🔧")
+
 @bot.message_handler(commands=['scan'])
-def scan(m): global OWNER_ID; OWNER_ID=m.chat.id; bot.send_message(m.chat.id,"🔍 Scanning OPEN OTC..."); threading.Thread(target=do_trade, daemon=True).start()
+def scan(m):
+    global OWNER_ID; OWNER_ID=m.chat.id
+    bot.send_message(m.chat.id,"🔍 👀 Scanning markets... 📡\n⏳ Checking RSI & EMA... 🧠")
+    threading.Thread(target=do_trade, daemon=True).start()
+
 @bot.message_handler(commands=['testbuy'])
 def testbuy(m):
     global OWNER_ID; OWNER_ID=m.chat.id
-    bot.send_message(m.chat.id,"🧪 Testing BUY...")
+    bot.send_message(m.chat.id,"🧪 🔬 TEST BUY INITIATED! 🚀\n💵 Placing $10 CALL on first open OTC... 🎯\n⏳ Please wait... 🤞")
     try:
         open_pairs=get_open_pairs()
         test_pair=open_pairs[0] if open_pairs else "EURUSD-OTC"
@@ -157,52 +165,61 @@ def testbuy(m):
             if Iq is None: iq_connect_force()
             status,tid=Iq.buy(10,test_pair,"call",1)
         if status:
-            bot.send_message(m.chat.id,f"✅ BUY PLACED {test_pair} ID {tid} 65s wait...")
+            bot.send_message(m.chat.id,f"✅ 🎉 TEST BUY SUCCESS! 🎉\n\n📈 Pair: {test_pair}\n💵 Amount: $10\n🆔 ID: {tid}\n\n⏰ Waiting 65 seconds for result... ⏳\n🤞 Fingers crossed! 🍀")
             time.sleep(65)
             with IQ_LOCK: profit=Iq.check_win_v3(tid); bal=Iq.get_balance()
-            bot.send_message(m.chat.id,f"Result {profit} Bal ${round(bal,2)}")
+            if profit>0:
+                bot.send_message(m.chat.id,f"💰 🏆 WINNER WINNER! 🏆 💰\n\n💵 Profit: +${round(profit,2)} 🤑\n💳 Balance: ${round(bal,2)} 💎\n🎉 Great! Auto-trading will work! 🚀")
+            else:
+                bot.send_message(m.chat.id,f"📉 😢 LOSS but BUY WORKS! ✅\n\n💸 Loss: ${round(profit,2)}\n💳 Balance: ${round(bal,2)}\n💪 Next trade will be bigger! 🔄")
         else:
-            bot.send_message(m.chat.id,f"❌ Failed {test_pair}: {tid}")
+            bot.send_message(m.chat.id,f"❌ 😭 Buy failed on {test_pair}\n📝 Reason: {tid}\n🔄 Trying other pairs...")
     except Exception as e:
-        bot.send_message(m.chat.id,f"❌ Err {e}"); print(f"testbuy err {e}", flush=True)
+        bot.send_message(m.chat.id,f"❌ 🛑 Test error: {e} 😵")
+
 @bot.message_handler(commands=['loosetrade'])
-def loosetrade(m): global OWNER_ID; OWNER_ID=m.chat.id; bot.send_message(m.chat.id,"🔥 LOOSE start"); threading.Thread(target=do_trade, daemon=True).start()
+def loosetrade(m):
+    global OWNER_ID; OWNER_ID=m.chat.id
+    bot.send_message(m.chat.id,"🔥 🚀 LOOSE MODE ACTIVATED! 🚀 🔥\n🎯 Will trade ANY trend! 😈")
+    threading.Thread(target=do_trade, daemon=True).start()
+
 def do_trade():
     global LAST_SIGNAL, current_amount, martingale_level
     if not OWNER_ID: return
     if Iq is None: iq_connect_force()
     PAIRS=get_open_pairs(); random.shuffle(PAIRS)
-    print(f"SCANNING OPEN ONLY {PAIRS}", flush=True)
-    try: bot.send_message(OWNER_ID,f"🔍 Scanning {', '.join(PAIRS)} Amt ${current_amount}")
+    try: bot.send_message(OWNER_ID,f"🔍 📡 Scanning {len(PAIRS)} open markets... 👀\n📋 {', '.join(PAIRS[:4])}...\n💵 Trading with ${current_amount} 🎯")
     except: pass
     for pair in PAIRS:
         direction,reason=analyze_loose(pair)
-        print(f"ANALYZE {pair} {direction} {reason}", flush=True)
         if direction:
             try:
                 with IQ_LOCK:
                     if Iq is None: raise Exception("Iq None")
                     status,tid=Iq.buy(current_amount,pair,direction,1)
-                if not status:
-                    print(f"BUY FAILED {pair} {tid} next", flush=True); continue
-                bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount}\n{reason}")
+                if not status: continue
+                emoji = "📈 🚀" if direction=="call" else "📉 🧸"
+                bot.send_message(OWNER_ID,f"✅ {emoji} TRADE PLACED! {emoji}\n\n📊 Pair: {pair}\n🎯 Direction: {direction.upper()} {emoji}\n💵 Amount: ${current_amount}\n📝 Reason: {reason}\n⏰ Expiry: 1 minute ⏳\n\n🤞 Good luck! 🍀")
                 time.sleep(65)
                 with IQ_LOCK: profit=Iq.check_win_v3(tid); bal=Iq.get_balance()
                 LAST_SIGNAL=time.time()
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)} Bal ${round(bal,2)} Reset")
+                    bot.send_message(OWNER_ID,f"💰 🎉💰 JACKPOT! 💰🎉 💰\n\n🏆 WIN! +${round(profit,2)} 🤑\n💳 Balance: ${round(bal,2)} 💎\n🔄 Resetting to ${BASE_AMOUNT} ✨\n\n🚀 Next scan in 3 mins... ⏰")
                     current_amount=BASE_AMOUNT; martingale_level=0
                 else:
                     martingale_level+=1
                     if martingale_level>=MAX_MARTINGALE:
-                        bot.send_message(OWNER_ID,f"📉 LOSS Reset Bal ${round(bal,2)}"); current_amount=BASE_AMOUNT; martingale_level=0
+                        bot.send_message(OWNER_ID,f"📉 😭 Oops! LOSS! 😭\n\n💸 Lost: ${current_amount}\n💳 Balance: ${round(bal,2)}\n🔄 Martingale reset! Starting fresh at ${BASE_AMOUNT} 🌱\n\n💪 Don't worry, we got next one! 🔥")
+                        current_amount=BASE_AMOUNT; martingale_level=0
                     else:
-                        current_amount=BASE_AMOUNT*(2**martingale_level); bot.send_message(OWNER_ID,f"📉 LOSS Next ${current_amount} Lvl {martingale_level} Bal ${round(bal,2)}")
+                        current_amount=BASE_AMOUNT*(2**martingale_level)
+                        bot.send_message(OWNER_ID,f"📉 😢 Loss! But we double down! 💪\n\n💳 Balance: ${round(bal,2)}\n💵 Next Amount: ${current_amount} 🎯\n🪜 Level: {martingale_level} / {MAX_MARTINGALE} 📈\n\n🔥 Revenge trade incoming! 😈")
                 return
-            except Exception as e: print(f"BUY ERR {e}", flush=True); continue
+            except: continue
     LAST_SIGNAL=time.time()
-    try: bot.send_message(OWNER_ID,f"⏭️ No signal Amt ${current_amount}")
+    try: bot.send_message(OWNER_ID,f"⏭️ 💤 No strong signal found! 😴\n💵 Still at ${current_amount}\n🔍 Will try again in 3 mins... ⏰👀")
     except: pass
+
 def scanner_loop():
     while True:
         try:
@@ -210,18 +227,19 @@ def scanner_loop():
             if not OWNER_ID or not SCANNING: continue
             wait_time=120 if LAST_SIGNAL==0 else 180
             if time.time()-(RESUME_AT if LAST_SIGNAL==0 else LAST_SIGNAL) < wait_time: continue
-            print("Auto scanner trigger", flush=True); do_trade()
-        except Exception as e: print(f"SCAN ERR {e}", flush=True); time.sleep(5)
+            do_trade()
+        except: time.sleep(5)
+
 def polling_loop():
     global BOT_RUNNING
     if BOT_RUNNING: return
     BOT_RUNNING=True; delete_webhook(); time.sleep(3)
-    print("🔄 Starting polling V22", flush=True)
     while True:
         try: bot.infinity_polling(none_stop=True, timeout=90, long_polling_timeout=90, skip_pending=True)
         except Exception as e:
-            if "409" in str(e).lower(): print("409 15s", flush=True); delete_webhook(); time.sleep(15)
-            else: print(f"Polling err {e}", flush=True); time.sleep(5)
+            if "409" in str(e).lower(): delete_webhook(); time.sleep(15)
+            else: time.sleep(5)
+
 threading.Thread(target=scanner_loop, daemon=True).start()
 threading.Thread(target=polling_loop, daemon=True).start()
 if __name__=="__main__":
