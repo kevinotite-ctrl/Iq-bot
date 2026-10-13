@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.2.6 10-20-40 WEBHOOK FIX ===", flush=True)
+print("=== V17.2.8 3-PAIRS 50-100% FIX ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -11,7 +11,7 @@ BASE_AMOUNT = 10
 MARTINGALE_AMOUNTS = [10, 20, 40]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
-MIN_CONFIDENCE = 70
+MIN_CONFIDENCE = 50
 EXPIRY = 2
 SCAN_INTERVAL = 120
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") or "https://your-service-name.onrender.com"
@@ -49,9 +49,12 @@ NEXT_SCAN_AT = time.time() + 60
 ALERT_SENT = False
 
 WEEKEND_PAIRS = [
-    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC"]
+    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC"
+]
 WEEKDAY_PAIRS = [
-    "EURUSD", "GBPUSD"]
+    "EURUSD", "GBPUSD", "EURJPY"
+]
+
 def get_pairs():
     wd = datetime.datetime.now().weekday()
     return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
@@ -145,7 +148,7 @@ def get_ema(candles, period):
 
 def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
     try:
-        confidence = 64
+        confidence = 50
         closes=[c['close'] for c in candles]
         gap = abs(ema7-ema21) / ema21 * 1000
         if gap > 1.2: confidence += 20
@@ -169,8 +172,8 @@ def calculate_confidence_2min(candles, ema7, ema21, rsi, direction):
             if last_5[0] > last_5[1] > last_5[2] > last_5[3] > last_5[4]: confidence += 14
             elif last_5[1] > last_5[2] > last_5[3] > last_5[4]: confidence += 9
             elif last_5[2] > last_5[3] > last_5[4]: confidence += 5
-        return min(100, max(60, int(confidence)))
-    except: return 80
+        return min(100, max(50, int(confidence)))
+    except: return 70
 
 def iq_connect():
     global Iq
@@ -204,7 +207,7 @@ iq_connect()
 @app.route('/')
 def home():
     cd,_ = get_countdown()
-    return f"V17.2.6 10-20-40 LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
+    return f"V17.2.8 3-PAIRS 50-100% LIVE {len(get_pairs())} pairs BAL {Iq.get_balance() if Iq else 'NO IQ'} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -235,7 +238,7 @@ def start(m):
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
     cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.2.6 10-20-40 ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    bot.send_message(m.chat.id, f"🤖 V17.2.8 3-PAIRS 50-100% ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -304,7 +307,7 @@ def do_trade():
     cd,_ = get_countdown()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    send_private(f"⏭️ No 85-100% signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
+    send_private(f"⏭️ No 50-100% signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
 
 def scanner():
     while True:
