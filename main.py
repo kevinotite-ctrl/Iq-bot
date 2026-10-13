@@ -1,8 +1,17 @@
-import os, time, threading, random, datetime, requests
+import os, time, threading, random, datetime, requests, logging
+# === SILENCE RED ERRORS ===
+logging.getLogger().setLevel(logging.CRITICAL)
+logging.getLogger("iqoptionapi").setLevel(logging.CRITICAL)
+for l in ["", "root", "iqoptionapi", "iqoptionapi.stable_api"]:
+    lg = logging.getLogger(l)
+    lg.setLevel(logging.CRITICAL)
+    lg.propagate = False
+
+import sys
 from flask import Flask
 import telebot
 
-print("=== KEVIN V17 LOCK FIX - FINAL ===", flush=True)
+print("=== KEVIN V18 CLEAN LOGS ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -11,14 +20,13 @@ PASS = os.getenv("IQ_PASSWORD")
 
 BASE_AMOUNT=10; MAX_MARTINGALE=3; current_amount=10; martingale_level=0
 OWNER_ID=None; Iq=None; SCANNING=True; LAST_SIGNAL=0; RESUME_AT=time.time()
-IQ_LOCK = threading.Lock() # <-- FIXES YOUR BUY ERR
+IQ_LOCK = threading.Lock()
 BOT_RUNNING=False
 
-WEEKEND_PAIRS=["EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC"]
-WEEKDAY_PAIRS=["EURUSD","GBPUSD","EURJPY","USDJPY","EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC"]
+WEEKEND_PAIRS=["EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC","XAUUSD-OTC"]
+WEEKDAY_PAIRS=["EURUSD","GBPUSD","EURJPY","USDJPY","EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC","XAUUSD-OTC"]
 
-def get_pairs():
-    return WEEKEND_PAIRS if datetime.datetime.now().weekday()>=5 else WEEKDAY_PAIRS
+def get_pairs(): return WEEKEND_PAIRS if datetime.datetime.now().weekday()>=5 else WEEKDAY_PAIRS
 
 def delete_webhook():
     try:
@@ -48,7 +56,7 @@ def get_ema(candles,period):
 
 def iq_connect_force():
     global Iq
-    with IQ_LOCK: # LOCK HERE
+    with IQ_LOCK:
         if Iq:
             try: Iq.close()
             except: pass
@@ -58,17 +66,13 @@ def iq_connect_force():
             from iqoptionapi.stable_api import IQ_Option
             print(f"CONNECTING IQ {EMAIL}...", flush=True)
             Iq=IQ_Option(EMAIL,PASS)
-            ok,reason=Iq.connect()
-            print(f"IQ CONNECT {ok} {reason}", flush=True)
+            ok,_=Iq.connect()
             if ok:
                 time.sleep(5)
                 try: Iq.change_balance("PRACTICE")
                 except: pass
-                print(f"IQ BAL {Iq.get_balance()}", flush=True)
-                # Warm candles
-                try: Iq.get_candles("EURUSD-OTC",60,5,time.time())
-                except: pass
-                time.sleep(1)
+                bal=Iq.get_balance()
+                print(f"✅ IQ READY BAL {bal}", flush=True)
                 return True
             return False
         except Exception as e:
@@ -77,20 +81,17 @@ def iq_connect_force():
 
 def get_candles_safe(pair):
     global Iq
-    for attempt in range(3):
+    for _ in range(3):
         try:
             with IQ_LOCK:
-                if Iq is None:
-                    print("Iq is None in get_candles_safe", flush=True)
-                    raise Exception("Iq None")
+                if Iq is None: raise Exception("Iq None")
                 candles=Iq.get_candles(pair,60,50,time.time())
             if candles and len(candles)>=20:
                 return candles
-        except Exception as e:
-            print(f"get_candles retry {pair} {e}", flush=True)
-        # Reconnect outside lock to avoid deadlock
+        except:
+            pass
         iq_connect_force()
-        time.sleep(3)
+        time.sleep(2)
     return None
 
 def analyze(pair):
@@ -108,7 +109,7 @@ bot=telebot.TeleBot(TOKEN, threaded=False)
 def home():
     try: b=round(Iq.get_balance(),2) if Iq else "NO IQ"
     except: b="?"
-    return f"V17 LOCK FIX BAL {b} AMT {current_amount}"
+    return f"V18 CLEAN BAL {b} AMT {current_amount}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def wh(): delete_webhook(); return "DELETED",200
@@ -119,7 +120,7 @@ def start(m):
     OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; current_amount=BASE_AMOUNT; martingale_level=0
     if not iq_connect_force():
         bot.send_message(m.chat.id, "❌ IQ login failed"); return
-    bot.send_message(m.chat.id, f"🤖 V17 LOCK FIX\n✅ BUY ERR fixed\n✅ Socket closed fixed\nBal ${Iq.get_balance()}\n/resume /pause /balance")
+    bot.send_message(m.chat.id, f"🤖 V18 CLEAN\n✅ Red errors silenced\nBal ${Iq.get_balance()}\n/resume /pause /balance")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -127,7 +128,6 @@ def resume(m):
     OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
     iq_connect_force()
     bot.send_message(m.chat.id, f"▶️ RESUMED Amt ${current_amount}")
-
 @bot.message_handler(commands=['pause'])
 def pause(m): global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
 @bot.message_handler(commands=['balance','status'])
@@ -143,26 +143,18 @@ def scan(m): global OWNER_ID; OWNER_ID=m.chat.id; threading.Thread(target=do_tra
 def do_trade():
     global LAST_SIGNAL, current_amount, martingale_level
     if not OWNER_ID: return
-    print("=== TRADE CYCLE ===", flush=True)
-    # Don't reconnect here if already connected, use safe
-    if Iq is None:
-        iq_connect_force()
+    if Iq is None: iq_connect_force()
     PAIRS=get_pairs(); random.shuffle(PAIRS)
     print(f"SCANNING {PAIRS}", flush=True)
-    try: bot.send_message(OWNER_ID, f"🔍 Scanning {', '.join(PAIRS)}...")
-    except: pass
     for pair in PAIRS:
         direction, reason=analyze(pair)
         print(f"ANALYZE {pair} {direction} {reason}", flush=True)
         if direction:
             try:
-                with IQ_LOCK: # LOCK FOR BUY
-                    if Iq is None:
-                        raise Exception("Iq None before buy")
+                with IQ_LOCK:
+                    if Iq is None: raise Exception("Iq None")
                     status,tid=Iq.buy(current_amount,pair,direction,1)
-                if not status:
-                    print(f"BUY FAILED {status} {tid}", flush=True)
-                    continue
+                if not status: continue
                 bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} {direction.upper()} ${current_amount} {reason}")
                 time.sleep(65)
                 with IQ_LOCK:
@@ -181,9 +173,7 @@ def do_trade():
                         bot.send_message(OWNER_ID,f"📉 LOSS Next ${current_amount} Lvl {martingale_level} Bal ${round(bal,2)}")
                 return
             except Exception as e:
-                print(f"BUY ERR {e}", flush=True)
-                # Don't reconnect inside lock
-                continue
+                print(f"BUY ERR {e}", flush=True); continue
     LAST_SIGNAL=time.time()
     bot.send_message(OWNER_ID,f"⏭️ No signal Amt ${current_amount}")
 
@@ -206,11 +196,10 @@ def polling_loop():
         try:
             bot.infinity_polling(none_stop=True, timeout=90, long_polling_timeout=90, skip_pending=True)
         except Exception as e:
-            err=str(e).lower()
-            if "409" in err:
-                print("409 waiting 15s", flush=True); delete_webhook(); time.sleep(15)
+            if "409" in str(e).lower():
+                delete_webhook(); time.sleep(15)
             else:
-                print(f"Polling err {e}", flush=True); time.sleep(5)
+                time.sleep(5)
 
 threading.Thread(target=scanner_loop, daemon=True).start()
 threading.Thread(target=polling_loop, daemon=True).start()
