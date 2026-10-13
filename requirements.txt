@@ -1,3 +1,6 @@
 Flask
 pyTelegramBotAPI
-git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git@master
+requests
+numpy
+iqoptionapi
+git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
