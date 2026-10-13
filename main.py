@@ -51,8 +51,7 @@ WEEKEND_PAIRS = [
     "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC"
 ]
 WEEKDAY_PAIRS = [
-    "EURUSD", "GBPUSD", "EURJPY"
-]
+    "EURUSD", "GBPUSD", "EURJPY","EURUSD-OTC","GPBUSD-OTC"]
 
 def get_pairs():
     wd = datetime.datetime.now().weekday()
