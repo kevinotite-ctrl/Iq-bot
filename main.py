@@ -1,7 +1,7 @@
 import os, time, threading, random, datetime, json
 from flask import Flask, request
 import telebot
-print("=== V17.4.2 BALANCE FIX + 3 PAIRS + RSI 30-70 ===", flush=True)
+print("=== V17.5.0 REAL SIGNALS - NO SUSPENDED SPAM ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
@@ -12,7 +12,7 @@ MARTINGALE_AMOUNTS = [10, 20, 40]
 MAX_MARTINGALE = 3
 STATE_FILE = "bot_state.json"
 EXPIRY = 1
-SCAN_INTERVAL = 120
+SCAN_INTERVAL = 180 # 3 mins - stop IQ from suspending you
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") or "https://your-service-name.onrender.com"
 
 def load_state():
@@ -25,11 +25,8 @@ def load_state():
                 if martingale_level < len(MARTINGALE_AMOUNTS):
                     current_amount = MARTINGALE_AMOUNTS[martingale_level]
                 else:
-                    martingale_level = 0
-                    current_amount = MARTINGALE_AMOUNTS[0]
-                return True
+                    martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
     except: pass
-    return False
 
 def save_state():
     try:
@@ -37,28 +34,23 @@ def save_state():
             json.dump({'level': martingale_level, 'amount': current_amount, 'time': time.time()}, f)
     except: pass
 
-current_amount = BASE_AMOUNT
-martingale_level = 0
-load_state()
-OWNER_ID = None
-Iq = None
-SCANNING = True
-LAST_SIGNAL = 0
-NEXT_SCAN_AT = time.time() + 60
-ALERT_SENT = False
+current_amount=BASE_AMOUNT; martingale_level=0; load_state()
+OWNER_ID=None; Iq=None; SCANNING=True; LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60; ALERT_SENT=False
 
-# 3 PAIRS ONLY - OTC 24/7 NO "ASSET NOT AVAILABLE" ERROR
-WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC"]
-WEEKDAY_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC"]
+# 8 PAIRS - IQ won't suspend all at once
+ALL_OTC_PAIRS = [
+    "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC",
+    "EURGBP-OTC", "AUDCAD-OTC", "USDCHF-OTC", "EURAUD-OTC"
+]
 
 def get_pairs():
-    return WEEKEND_PAIRS # Always OTC
+    # Return 3 random from 8 to avoid suspension
+    return random.sample(ALL_OTC_PAIRS, 3)
 
 def get_countdown():
     remaining = int(NEXT_SCAN_AT - time.time())
     if remaining < 0: remaining = 0
-    m = remaining // 60
-    s = remaining % 60
+    m=remaining//60; s=remaining%60
     return f"{m:02d}:{s:02d}", remaining
 
 bot = telebot.TeleBot(TOKEN)
@@ -73,55 +65,24 @@ def send_channel(text):
     except: pass
 
 def send_channel_big_signal(pair, direction, reason):
-    if direction == "call":
-        big_dir = "🟢🟢🟢🟢🟢\n💹 BUY / CALL 💹💹\n🟢🟢🟢🟢🟢\n⬆️⬆️⬆️ GO UP ⬆️⬆️⬆️"
-    else:
-        big_dir = "🔴🔴🔴🔴🔴\n📉📉 SELL / PUT 📉📉\n🔴🔴🔴🔴🔴\n⬇️⬇️⬇️ GO DOWN ⬇️⬇️⬇️"
+    big = "🟢🟢 BUY / CALL UP ⬆️" if direction=="call" else "🔴🔴 SELL / PUT DOWN ⬇️"
     channel_msg = f"""
-🔥🔥🔥🔥🔥🔥
-🚀🚀 NEW SIGNAL ALERT 🚀🚀
-🔥🔥🔥🔥🔥🔥
-
+🔥 NEW SIGNAL 🚀
 💰 PAIR: {pair}
-{big_dir}
-
-⏰ EXPIRY: {EXPIRY} MINUTES
-💵 AMOUNT: At your own risk 💰
-
+{big}
+⏰ EXPIRY: {EXPIRY} MINUTE
+💵 At your own risk
 {reason}
-
-⚡️⚡️ TAKE THE TRADE NOW ⚡️⚡️⚡️
+⚡️ TAKE TRADE NOW ⚡️
 """
     def delayed():
         time.sleep(10)
         send_channel(channel_msg)
-        time.sleep(2)
-        guide = f"""
-📚 HOW TO PLACE TRADE ON IQ OPTION 📚
-
-1️⃣ Open IQ Option App
-2️⃣ Select Asset: {pair}
-3️⃣ Set Amount: At your own risk 💰
-4️⃣ Set Time: {EXPIRY} Minutes
-5️⃣ Click:
-{"🟢 GREEN BUTTON (CALL) 🟢" if direction=="call" else "🔴 RED BUTTON (PUT) 🔴"}
-
-⚠️ Trade immediately after signal!
-
-👇 Example below 👇
-"""
-        send_channel(guide)
-        try:
-            if os.path.exists("iq_example.jpg"):
-                with open("iq_example.jpg", "rb") as photo:
-                    bot.send_photo(CHANNEL_ID, photo, caption=f"{pair} {direction.upper()} Example")
-        except: pass
     threading.Thread(target=delayed, daemon=True).start()
 
 def get_rsi(candles, period=14):
     try:
-        closes=[c['close'] for c in candles]
-        gains=[]; losses=[]
+        closes=[c['close'] for c in candles]; gains=[]; losses=[]
         for i in range(1,len(closes)):
             d=closes[i]-closes[i-1]
             gains.append(max(d,0)); losses.append(max(-d,0))
@@ -144,48 +105,62 @@ def iq_connect():
     try:
         from iqoptionapi.stable_api import IQ_Option
         Iq = IQ_Option(EMAIL, PASS)
-        check, reason = Iq.connect()
+        check, _ = Iq.connect()
         if check:
-            Iq.change_balance("PRACTICE")
+            # TRY REAL FIRST - PRACTICE OTC gets suspended fast
+            # If REAL has no money, it will auto stay on PRACTICE
+            try:
+                Iq.change_balance("REAL")
+                bal = Iq.get_balance()
+                if bal < 5: # No real money
+                    Iq.change_balance("PRACTICE")
+            except:
+                Iq.change_balance("PRACTICE")
             return True
-    except Exception as e:
-        print(f"IQ connect failed {e}", flush=True)
+    except: pass
     return False
 
 def get_safe_balance():
     global Iq
     try:
-        if not Iq:
-            iq_connect()
-        return round(Iq.get_balance(), 2)
+        if not Iq: iq_connect()
+        return round(Iq.get_balance(),2)
     except:
         try:
-            iq_connect()
-            time.sleep(1)
-            return round(Iq.get_balance(), 2)
-        except:
-            return "RECONNECTING"
+            iq_connect(); time.sleep(1)
+            return round(Iq.get_balance(),2)
+        except: return "RECONNECTING"
+
+def is_asset_open(pair):
+    # Check if IQ says asset is open
+    try:
+        all_open = Iq.get_all_open_time()
+        if 'binary' in all_open and pair in all_open['binary']:
+            return all_open['binary'][pair]['open']
+        return True # Assume open if not in list
+    except: return True
 
 def analyze(pair):
     try:
+        if not is_asset_open(pair):
+            return None, "SUSPENDED"
         candles = Iq.get_candles(pair, 60, 50, time.time())
         if not candles or len(candles)<25: return None, "No candles"
         ema7=get_ema(candles[-15:],7); ema21=get_ema(candles,21); rsi=get_rsi(candles,14); close=candles[-1]['close']
         if close>ema7>ema21 and 30<rsi<70:
-            return "call", f"UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
+            return "call", f"UP EMA7 > EMA21 RSI {round(rsi,1)}"
         elif close<ema7<ema21 and 30<rsi<70:
-            return "put", f"DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
+            return "put", f"DOWN EMA7 < EMA21 RSI {round(rsi,1)}"
         else:
             return None, f"SKIP RSI {round(rsi,1)}"
-    except: return None, f"Err"
+    except: return None, "Err"
 
 iq_connect()
 
 @app.route('/')
 def home():
-    cd,_ = get_countdown()
-    bal = get_safe_balance()
-    return f"V17.4.2 LIVE {len(get_pairs())} pairs BAL {bal} NEXT {cd}"
+    cd,_=get_countdown(); bal=get_safe_balance()
+    return f"V17.5.0 LIVE BAL {bal} NEXT {cd}"
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
@@ -194,46 +169,18 @@ def webhook():
         update = telebot.types.Update.de_json(json_str)
         bot.process_new_updates([update])
     except: pass
-    return "OK", 200
+    return "OK",200
 
-@app.route('/setwebhook')
-def set_webhook():
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-        url = f"{RENDER_URL}/{TOKEN}"
-        bot.set_webhook(url=url)
-        return f"Webhook set to {url}"
-    except Exception as e:
-        return f"Error {e}"
-
-@bot.message_handler(commands=['start'])
-def start(m):
-    global OWNER_ID, LAST_SIGNAL, NEXT_SCAN_AT
-    OWNER_ID=m.chat.id; LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60
-    load_state()
-    bal = get_safe_balance()
-    cd,_ = get_countdown()
-    bot.send_message(m.chat.id, f"🤖 V17.4.2 RSI 30-70 ✅\nPairs: {len(get_pairs())}\nBal ${bal}\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
-
-@bot.message_handler(commands=['balance'])
-def balance_cmd(m):
-    global OWNER_ID
+@bot.message_handler(commands=['start','balance','resume'])
+def handle_all(m):
+    global OWNER_ID, LAST_SIGNAL, NEXT_SCAN_AT, SCANNING
     OWNER_ID=m.chat.id
-    bal = get_safe_balance()
-    status = "✅ Connected" if "RECONNECTING" not in str(bal) else "❌ Reconnecting..."
-    bot.send_message(m.chat.id, f"💰 Balance: ${bal}\n{status}\nNext: ${current_amount} Lvl {martingale_level}")
-
-@bot.message_handler(commands=['resume'])
-def resume(m):
-    global OWNER_ID, LAST_SIGNAL, SCANNING, NEXT_SCAN_AT
-    OWNER_ID=m.chat.id; SCANNING=True; LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60
-    load_state()
-    iq_connect()
-    time.sleep(1)
-    bal = get_safe_balance()
-    cd,_ = get_countdown()
-    send_private(f"▶️ RESUMED {len(get_pairs())} pairs\nBal ${bal}\nSaved ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}")
+    if m.text.startswith('/resume'): SCANNING=True; LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60
+    if m.text.startswith('/start'): LAST_SIGNAL=0; NEXT_SCAN_AT=time.time()+60
+    load_state(); iq_connect(); time.sleep(1)
+    bal=get_safe_balance(); cd,_=get_countdown()
+    txt = f"🤖 V17.5.0 1 MIN ✅\nBal ${bal}\nPairs: 8 OTC rotating (3 per scan)\nNext ${current_amount} Lvl {martingale_level}\n⏳ Next in {cd}\n\nIf OTC suspended, bot auto-skips and waits."
+    bot.send_message(m.chat.id, txt)
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
@@ -246,90 +193,91 @@ def scan(m):
 def do_trade():
     global LAST_SIGNAL, current_amount, martingale_level, NEXT_SCAN_AT, ALERT_SENT
     if not Iq and not iq_connect():
-        send_private("❌ IQ login failed - retrying next cycle")
-        LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False; return
+        LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+300; return
     if not OWNER_ID: return
-    PAIRS=get_pairs(); random.shuffle(PAIRS)
-    found_signal = False
+    PAIRS=get_pairs()
+    success=False
+    suspended_count=0
     for pair in PAIRS:
         direction, reason = analyze(pair)
+        if reason=="SUSPENDED": suspended_count+=1; continue
         if direction:
-            found_signal = True
             try:
-                # TRADE FIRST
                 status, trade_id = Iq.buy(current_amount, pair, direction, EXPIRY)
                 if not status:
-                    err = str(trade_id)[:80] if trade_id else "Asset closed"
-                    send_private(f"⚠️ {pair} {direction.upper()} found but IQ rejected: {err}")
+                    err=str(trade_id)
+                    if "suspended" in err.lower():
+                        suspended_count+=1
+                        continue # Skip this pair, try next - don't spam
+                    send_private(f"⚠️ {pair} {direction.upper()} IQ rejected: {err[:60]}")
                     continue
 
-                private_msg = f"✅ TRADE PLACED {pair} {direction.upper()}\n💯 {pair} {direction.upper()} | ${current_amount} Lvl {martingale_level} Exp {EXPIRY}min\n{reason}"
+                # SUCCESS - TRADE PLACED FIRST
+                success=True
+                private_msg = f"✅ TRADE PLACED {pair} {direction.upper()} | 1 MIN\n${current_amount} Lvl {martingale_level}\n{reason}"
                 send_private(private_msg)
                 send_channel_big_signal(pair, direction, reason)
 
-                send_private(f"⏳ Wait 125s for result...")
-                time.sleep(125)
-                profit=Iq.check_win_v3(trade_id); bal=get_safe_balance(); LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
-                cd,_ = get_countdown()
+                send_private(f"⏳ Wait 65s...")
+                time.sleep(65)
+                profit=Iq.check_win_v3(trade_id); bal=get_safe_balance()
+                LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
+                cd,_=get_countdown()
                 if profit and profit>0:
-                    result = f"💰 WIN +${round(profit,2)} ✅\nBal ${bal}\n🔄 Reset to $10\n⏳ Next in {cd}"
-                    send_private(result); send_private("🤑")
-                    send_channel(result); send_channel("🤑")
+                    result=f"💰 WIN +${round(profit,2)} ✅\nBal ${bal}\nReset to $10\n⏳ Next {cd}"
+                    send_private(result); send_channel(result)
                     martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]; save_state()
                 else:
-                    result = f"📉 LOSS -${current_amount} ❌\nBal ${bal}\n⏳ Next in {cd}"
-                    send_private(result); send_private("😮‍💨")
-                    send_channel(result); send_channel("😮‍💨")
+                    result=f"📉 LOSS -${current_amount} ❌\nBal ${bal}\n⏳ Next {cd}"
+                    send_private(result); send_channel(result)
                     martingale_level+=1
-                    if martingale_level >= MAX_MARTINGALE:
-                        send_private(f"🔄 Max martingale reached. Resetting to ${MARTINGALE_AMOUNTS[0]}")
+                    if martingale_level>=MAX_MARTINGALE:
                         martingale_level=0; current_amount=MARTINGALE_AMOUNTS[0]
+                        send_private(f"🔄 Reset to ${current_amount}")
                     else:
                         current_amount=MARTINGALE_AMOUNTS[martingale_level]
                         send_private(f"📈 Next ${current_amount} Lvl {martingale_level}")
                     save_state()
-                def we_go_again():
-                    time.sleep(3)
-                    send_channel("We go again ‼️‼️💯")
-                threading.Thread(target=we_go_again, daemon=True).start()
+                threading.Thread(target=lambda: (time.sleep(3), send_channel("We go again ‼️💯")), daemon=True).start()
                 return
             except Exception as e:
-                send_private(f"Error {e}")
                 continue
 
-    LAST_SIGNAL=time.time(); NEXT_SCAN_AT=time.time()+SCAN_INTERVAL; ALERT_SENT=False
-    cd,_ = get_countdown()
-    bal = get_safe_balance()
-    if found_signal:
-        send_private(f"⚠️ Signal found but all buys failed | Bal ${bal}\n⏳ Next in {cd}")
+    # AFTER LOOP
+    LAST_SIGNAL=time.time()
+    if suspended_count>=2:
+        # IQ suspended most OTC - wait 5 mins longer
+        NEXT_SCAN_AT=time.time()+300
+        cd,_=get_countdown()
+        bal=get_safe_balance()
+        send_private(f"⏸️ IQ suspended {suspended_count} pairs | Cooling 5 mins | Bal ${bal} | Next {cd}")
     else:
-        send_private(f"⏭️ No RSI 30-70 signal scanned {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal}\n⏳ Next in {cd}")
+        NEXT_SCAN_AT=time.time()+SCAN_INTERVAL
+        ALERT_SENT=False
+        # ONLY send "No signal" if truly no signal, not if suspended
+        if suspended_count==0:
+            bal=get_safe_balance(); cd,_=get_countdown()
+            send_private(f"⏭️ No RSI 30-70 signal in {len(PAIRS)} pairs | Next ${current_amount} Lvl {martingale_level} | Bal ${bal} | Next {cd}")
 
 def scanner():
     while True:
         try:
             time.sleep(2)
             if not OWNER_ID or not SCANNING: continue
-            if time.time() < NEXT_SCAN_AT: continue
+            if time.time()<NEXT_SCAN_AT: continue
             do_trade()
         except: time.sleep(5)
 
 def countdown_notifier():
     global ALERT_SENT
-    last_notified = 0
     while True:
         try:
             time.sleep(1)
             if not OWNER_ID or not SCANNING: continue
-            cd, rem = get_countdown()
-            if rem <= 5 and rem > 0 and not ALERT_SENT:
-                send_private(f"‼️Signal alert incoming ‼️\n💯Get Ready 💯\n5 secs to receiving the signal\nNext ${current_amount} Lvl {martingale_level}")
-                ALERT_SENT = True
-                last_notified = time.time()
-                continue
-            if rem in [90,60,30] and time.time() - last_notified > 25:
-                send_private(f"⏳ Next session in {cd}\nGet ready! Next ${current_amount} Lvl {martingale_level}")
-                last_notified = time.time()
+            cd,rem=get_countdown()
+            if rem<=5 and rem>0 and not ALERT_SENT:
+                send_private(f"‼️Signal incoming in 5 secs - Get Ready‼️ Next ${current_amount}")
+                ALERT_SENT=True
         except: time.sleep(2)
 
 threading.Thread(target=scanner, daemon=True).start()
@@ -337,12 +285,8 @@ threading.Thread(target=countdown_notifier, daemon=True).start()
 
 if __name__=="__main__":
     try:
-        bot.remove_webhook()
-        time.sleep(1)
-        ext_url = os.getenv("RENDER_EXTERNAL_URL")
-        if ext_url:
-            bot.set_webhook(url=f"{ext_url}/{TOKEN}")
-            print(f"Webhook set to {ext_url}/{TOKEN[:10]}...", flush=True)
-    except Exception as e:
-        print(f"Webhook set err {e}", flush=True)
+        bot.remove_webhook(); time.sleep(1)
+        ext=os.getenv("RENDER_EXTERNAL_URL")
+        if ext: bot.set_webhook(url=f"{ext}/{TOKEN}")
+    except: pass
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
