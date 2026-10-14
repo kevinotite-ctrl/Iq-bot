@@ -1,5 +1,6 @@
 Flask==2.3.3
 pyTelegramBotAPI==4.12.0
-requests
-python-socketio
+requests==2.31.0
+websocket-client==1.6.4
+numpy==1.26.4
 git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
