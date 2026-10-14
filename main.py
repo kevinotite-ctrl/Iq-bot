@@ -50,11 +50,15 @@ def get_ema(candles, period):
         for p in closes[1:]: ema=p*k+ema*(1-k)
         return ema
     except: return 0
-
 def iq_connect():
     global Iq
     try:
-        from iqoptionapi.stable_api import IQ_Option
+        try:
+            from iqoptionapi.stable_api import IQ_Option
+        except:
+            from iqoptionapi.api import IQ_Option
+        print("Connecting IQ...", flush=True)
+        Iq = IQ_Option(EMAIL, PASS)
         print("Connecting IQ...", flush=True)
         Iq = IQ_Option(EMAIL, PASS)
         check, reason = Iq.connect()
