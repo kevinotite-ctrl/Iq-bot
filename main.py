@@ -4,7 +4,9 @@ import telebot
 
 print("=== KEVIN V25 FINAL - 409 FIXED ===", flush=True)
 app = Flask(__name__)
-
+@app.route('/', methods=['GET', 'HEAD'])
+def home():
+    return "KEVIN V25 LIVE ✅", 200
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
