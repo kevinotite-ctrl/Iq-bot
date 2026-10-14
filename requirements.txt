@@ -1,7 +1,7 @@
-Flask==2.3.3
+setuptools
+Flask
 python-telegram-bot==13.15
-ta==0.10.2
-pandas==2.0.3
-requests==2.31.0
+requests
+pandas
+ta
 iqoptionapi
-git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
