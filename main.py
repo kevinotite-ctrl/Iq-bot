@@ -95,8 +95,23 @@ else:
         bal = 0
         try: bal = Iq.get_balance() if Iq else 0
         except: pass
-        bot.send_message(m.chat.id, f"🤖 KEVIN V25 FULL PAY CODE\n💰 Bal ${bal}\nPairs {len(PAIRS)}\nEMA7/21 + RSI\nMartingale 10>20>40\n\n/resume - Start trading\n/pause - Stop\n/balance")
-
+            
+      @bot.message_handler(commands=['start','balance'])
+      def start_cmd(m):
+        print(f"GOT /start from {m.chat.id}", flush=True)
+        bal_text = "IQ not connected yet, wait 20s"
+        try:
+            if Iq and Iq.check_connect():
+                b = Iq.get_balance()
+                bal_text = f"💰 ${b} PRACTICE"
+                print(f"BAL CHECK {b}", flush=True)
+            else:
+                bal_text = f"IQ status False - still connecting, check IQ_EMAIL/PASS in Render"
+        except Exception as e:
+            bal_text = f"Bal err {e}"
+            print(bal_text, flush=True)
+        bot.send_message(m.chat.id, f"🤖 KEVIN V25 FULL PAY CODE\n{bal_text}\n\n/resume - Start\n/pause - Stop\n/balance")
+          
     @bot.message_handler(commands=['resume'])
     def resume_cmd(m):
         global running
