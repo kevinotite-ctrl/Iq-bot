@@ -1,6 +1,4 @@
-Flask
-pyTelegramBotAPI
-numpy
-requests
-websocket-client
-git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
+Flask==2.3.3
+pyTelegramBotAPI==4.14.0
+yfinance==0.2.31
+requests==2.31.0
