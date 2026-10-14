@@ -1,4 +1,5 @@
 Flask==2.3.3
 pyTelegramBotAPI==4.12.0
-iqoptionapi
+iqoptionapi==6.8.9.2
 requests==2.31.0
+websocket-client==1.6.4
