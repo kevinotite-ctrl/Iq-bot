@@ -135,12 +135,13 @@ else:
     def run_bot():
         while True:
             try:
-                try: bot.remove_webhook()
-                except: pass
-                print("Polling FULL bot...", flush=True)
-                bot.infinity_polling(timeout=60, long_polling_timeout=60)
+                print("Trying remove webhook...", flush=True)
+                bot.remove_webhook()
+                time.sleep(2)
+                print("Starting infinity_polling FULL...", flush=True)
+                bot.infinity_polling(skip_pending=True, timeout=30)
             except Exception as e:
-                print(f"Polling ERR {e}", flush=True)
+                print(f"Polling ERR FULL {e}", flush=True)
                 time.sleep(5)
 
     threading.Thread(target=iq_connect, daemon=True).start()
