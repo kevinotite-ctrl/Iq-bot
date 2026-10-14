@@ -1,4 +1,4 @@
-import os, time, threading, random, datetime, requests, logging
+import os, time, threading, random, datetime, requests, logging, json
 logging.getLogger().setLevel(logging.CRITICAL)
 for l in ["", "root", "iqoptionapi", "iqoptionapi.stable_api"]:
     lg = logging.getLogger(l)
@@ -6,23 +6,68 @@ for l in ["", "root", "iqoptionapi", "iqoptionapi.stable_api"]:
     except: pass
 from flask import Flask
 import telebot
-print("=== KEVIN V22 EMOJI REPLIES ===", flush=True)
+print("=== KEVIN V23 MEMORY ===", flush=True)
 app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
-BASE_AMOUNT=10; MAX_MARTINGALE=3; current_amount=10; martingale_level=0
-OWNER_ID=None; Iq=None; SCANNING=True; LAST_SIGNAL=0; RESUME_AT=time.time()
+
+STATE_FILE = "kevin_memory.json" # Will stay on Render disk
+
+BASE_AMOUNT=10; MAX_MARTINGALE=3
+current_amount=10; martingale_level=0
+OWNER_ID=None; Iq=None; SCANNING=True
+LAST_SIGNAL=0; RESUME_AT=time.time()
 IQ_LOCK=threading.RLock(); BOT_RUNNING=False
+LAST_TRADE = {"pair": "None", "dir": "None", "amount": 0, "profit": 0, "time": "Never"}
+
 WEEKEND_PAIRS=["EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC","XAUUSD-OTC","EURJPY-OTC","USDJPY-OTC","GBPJPY-OTC"]
 WEEKDAY_PAIRS=["EURUSD-OTC","GBPUSD-OTC","AUDUSD-OTC","XAUUSD-OTC","EURJPY-OTC","USDJPY-OTC"]
-def get_pairs(): return WEEKEND_PAIRS
+
+def save_memory():
+    try:
+        data = {
+            "current_amount": current_amount,
+            "martingale_level": martingale_level,
+            "OWNER_ID": OWNER_ID,
+            "LAST_SIGNAL": LAST_SIGNAL,
+            "RESUME_AT": RESUME_AT,
+            "SCANNING": SCANNING,
+            "LAST_TRADE": LAST_TRADE,
+            "saved_at": time.time()
+        }
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+        print(f"💾 SAVED MEMORY {data}", flush=True)
+    except Exception as e:
+        print(f"save err {e}", flush=True)
+
+def load_memory():
+    global current_amount, martingale_level, OWNER_ID, LAST_SIGNAL, RESUME_AT, SCANNING, LAST_TRADE
+    try:
+        if not os.path.exists(STATE_FILE):
+            print("No memory file yet", flush=True)
+            return
+        with open(STATE_FILE, "r") as f:
+            data = json.load(f)
+        current_amount = data.get("current_amount", 10)
+        martingale_level = data.get("martingale_level", 0)
+        OWNER_ID = data.get("OWNER_ID")
+        LAST_SIGNAL = data.get("LAST_SIGNAL", 0)
+        RESUME_AT = data.get("RESUME_AT", time.time())
+        SCANNING = data.get("SCANNING", True)
+        LAST_TRADE = data.get("LAST_TRADE", LAST_TRADE)
+        print(f"🧠 LOADED MEMORY {data}", flush=True)
+    except Exception as e:
+        print(f"load err {e}", flush=True)
+
 def delete_webhook():
     try:
         requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10)
         b=telebot.TeleBot(TOKEN); b.remove_webhook()
-        print("✅ WEBHOOK DELETED", flush=True); time.sleep(2)
+        time.sleep(1)
     except: pass
+
 def get_rsi(candles,p=14):
     try:
         closes=[c['close'] for c in candles]; g=[]; l=[]
@@ -48,26 +93,21 @@ def iq_connect_force():
         time.sleep(2)
         try:
             from iqoptionapi.stable_api import IQ_Option
-            print(f"CONNECTING IQ {EMAIL}...", flush=True)
             Iq=IQ_Option(EMAIL,PASS)
             ok,reason=Iq.connect()
-            print(f"IQ CONNECT {ok} {reason}", flush=True)
             if ok:
                 time.sleep(5)
                 try: Iq.change_balance("PRACTICE")
                 except: pass
-                print(f"✅ IQ READY BAL {Iq.get_balance()}", flush=True)
                 return True
             return False
-        except Exception as e:
-            print(f"IQ ERR {e}", flush=True); return False
+        except: return False
 def get_open_pairs():
     try:
         with IQ_LOCK:
             if Iq is None: return WEEKEND_PAIRS
             all_open=Iq.get_all_open_time()
-        if not all_open or not isinstance(all_open, dict):
-            return WEEKEND_PAIRS
+        if not all_open or not isinstance(all_open, dict): return WEEKEND_PAIRS
         open_dict=all_open.get('turbo', {}) or all_open.get('binary', {}) or {}
         if not open_dict: return WEEKEND_PAIRS
         all_pairs=list(set(WEEKEND_PAIRS+WEEKDAY_PAIRS))
@@ -78,8 +118,7 @@ def get_open_pairs():
             elif data is True: open_pairs.append(p)
         if not open_pairs: return WEEKEND_PAIRS
         return open_pairs
-    except:
-        return WEEKEND_PAIRS
+    except: return WEEKEND_PAIRS
 def get_candles_safe(pair):
     global Iq
     for _ in range(3):
@@ -101,39 +140,60 @@ def analyze_loose(pair):
         if rsi>52: return "call",f"LOOSE UP 🚀 RSI {round(rsi,1)}"
         elif rsi<48: return "put",f"LOOSE DOWN 🧸 RSI {round(rsi,1)}"
         return None,f"SKIP 💤 RSI {round(rsi,1)}"
+
+# Load memory on boot
+load_memory()
 delete_webhook()
 bot=telebot.TeleBot(TOKEN, threaded=False)
+
 @app.route('/')
 def home():
-    try:
-        with IQ_LOCK: b=Iq.get_balance() if Iq else "NO IQ"
-    except: b="?"
-    return f"V22 EMOJI BAL {b}"
+    return f"V23 MEMORY BAL {current_amount} LVL {martingale_level} LAST {LAST_TRADE}"
+
 @app.route(f'/{TOKEN}', methods=['POST'])
 def wh(): delete_webhook(); return "DELETED",200
 
 @bot.message_handler(commands=['start'])
 def start(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, current_amount, martingale_level
-    OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; current_amount=BASE_AMOUNT; martingale_level=0
-    bot.send_message(m.chat.id,"🔄 ⏳ Connecting to IQ Option... please wait 🤖")
+    OWNER_ID=m.chat.id; RESUME_AT=time.time()
+    # Don't reset amount if we have memory!
+    if os.path.exists(STATE_FILE):
+        load_memory()
+        bot.send_message(m.chat.id,f"🧠 💾 MEMORY RESTORED! 💾 🧠\n\n💵 Amount: ${current_amount} 🎯\n🪜 Level: {martingale_level}\n📊 Last Trade: {LAST_TRADE['pair']} {LAST_TRADE['dir']} ${LAST_TRADE['amount']} → {LAST_TRADE['profit']}\n⏰ Time: {LAST_TRADE['time']}\n\n🚀 Resuming where we left off! 🔥")
+    else:
+        current_amount=BASE_AMOUNT; martingale_level=0
+        LAST_SIGNAL=0
+        bot.send_message(m.chat.id,"✨ 🤖 KEVIN V23 ONLINE ✨\n💾 Memory enabled!")
+    save_memory()
     if not iq_connect_force():
-        bot.send_message(m.chat.id,"❌ 😭 IQ login failed! Check EMAIL/PASS in Render ⚙️")
+        bot.send_message(m.chat.id,"❌ 😭 IQ login failed!")
         return
     open_pairs=get_open_pairs()
-    bot.send_message(m.chat.id,f"✨ 🤖 KEVIN V22 ONLINE ✨\n\n💰 Balance: ${Iq.get_balance()}\n📊 Open Markets: {', '.join(open_pairs[:4])} 🔥\n\n🎮 Commands:\n🚀 /scan - Force scan now\n🧪 /testbuy - Test $10 trade\n💳 /balance - Check balance\n⏸️ /pause - Pause bot\n▶️ /resume - Resume bot\n\n🔔 Bot will auto-trade every 3 mins ⏰")
+    bot.send_message(m.chat.id,f"💰 Balance: ${Iq.get_balance()}\n📊 Open: {', '.join(open_pairs[:4])} 🔥\n\n🚀 /scan 🧪 /testbuy 💳 /balance ⏸️ /pause ▶️ /resume 🧠 /memory")
+
+@bot.message_handler(commands=['memory', 'last'])
+def memory_cmd(m):
+    global OWNER_ID
+    OWNER_ID=m.chat.id
+    load_memory()
+    bot.send_message(m.chat.id,f"🧠 💾 SAVED MEMORY 💾 🧠\n\n💵 Current Amount: ${current_amount} 🎯\n🪜 Martingale Level: {martingale_level} / {MAX_MARTINGALE}\n📊 Last Trade:\n 📈 Pair: {LAST_TRADE['pair']}\n 🎯 Dir: {LAST_TRADE['dir']}\n 💵 Amount: ${LAST_TRADE['amount']}\n 💰 Profit: {LAST_TRADE['profit']}\n ⏰ Time: {LAST_TRADE['time']}\n\n🤖 Scanning: {'🟢 Active' if SCANNING else '🔴 Paused'} ⏰")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
     global OWNER_ID, RESUME_AT, LAST_SIGNAL, SCANNING
-    OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
+    OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time()
+    load_memory()
+    save_memory()
     iq_connect_force()
-    bot.send_message(m.chat.id,f"▶️ ✅ Resumed! 🚀\n💵 Amount: ${current_amount}\n🔍 Scanning OTC... 👀")
+    bot.send_message(m.chat.id,f"▶️ ✅ Resumed from MEMORY! 🧠\n💵 Amount: ${current_amount} (not reset!)\n🪜 Level: {martingale_level}\n📊 Last: {LAST_TRADE['pair']} {LAST_TRADE['profit']}\n🔍 Scanning... 👀")
 
 @bot.message_handler(commands=['pause'])
 def pause(m):
-    global SCANNING; SCANNING=False
-    bot.send_message(m.chat.id,"⏸️ 🛌 Bot paused! Sleeping... 😴\nSend /resume to wake me up! ☀️")
+    global SCANNING
+    SCANNING=False
+    save_memory()
+    bot.send_message(m.chat.id,f"⏸️ 🛌 Paused & Saved! 💾\n💵 Amount ${current_amount} saved!\n📊 Last: {LAST_TRADE['pair']}\nSend /resume to continue same level! ☀️")
 
 @bot.message_handler(commands=['balance','status'])
 def status(m):
@@ -143,21 +203,20 @@ def status(m):
         if bal is None:
             iq_connect_force()
             with IQ_LOCK: bal=Iq.get_balance()
-        open_pairs=get_open_pairs()
-        bot.send_message(m.chat.id,f"💳 💰 WALLET 💰 💳\n\n💵 Balance: ${round(bal,2)} 💎\n💸 Trade Amount: ${current_amount} 🎯\n📈 Level: {martingale_level} / {MAX_MARTINGALE} 🪜\n\n📊 Open Now: {', '.join(open_pairs[:5])} ✅\n\n🤖 Status: {'🟢 Active' if SCANNING else '🔴 Paused'}")
-    except Exception as e:
-        bot.send_message(m.chat.id,f"💳 Wallet (cached) 😅\n💵 ${current_amount} Lvl {martingale_level}\n🔄 Reconnecting... 🔧")
+        bot.send_message(m.chat.id,f"💳 💰 WALLET 💰 💳\n\n💵 Balance: ${round(bal,2)} 💎\n💸 Trade Amount: ${current_amount} 🎯 (REMEMBERED! 🧠)\n📈 Level: {martingale_level}\n📊 Last Trade: {LAST_TRADE['pair']} {LAST_TRADE['dir']} → {LAST_TRADE['profit']}\n⏰ {LAST_TRADE['time']}\n\n🤖 {'🟢 Active' if SCANNING else '🔴 Paused'}")
+    except:
+        bot.send_message(m.chat.id,f"💳 Wallet 💾\n💵 Amt ${current_amount} Lvl {martingale_level}\n📊 Last {LAST_TRADE}")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
-    global OWNER_ID; OWNER_ID=m.chat.id
-    bot.send_message(m.chat.id,"🔍 👀 Scanning markets... 📡\n⏳ Checking RSI & EMA... 🧠")
+    global OWNER_ID; OWNER_ID=m.chat.id; save_memory()
+    bot.send_message(m.chat.id,"🔍 👀 Scanning... 📡")
     threading.Thread(target=do_trade, daemon=True).start()
 
 @bot.message_handler(commands=['testbuy'])
 def testbuy(m):
     global OWNER_ID; OWNER_ID=m.chat.id
-    bot.send_message(m.chat.id,"🧪 🔬 TEST BUY INITIATED! 🚀\n💵 Placing $10 CALL on first open OTC... 🎯\n⏳ Please wait... 🤞")
+    bot.send_message(m.chat.id,"🧪 🔬 TEST BUY... 🚀")
     try:
         open_pairs=get_open_pairs()
         test_pair=open_pairs[0] if open_pairs else "EURUSD-OTC"
@@ -165,30 +224,21 @@ def testbuy(m):
             if Iq is None: iq_connect_force()
             status,tid=Iq.buy(10,test_pair,"call",1)
         if status:
-            bot.send_message(m.chat.id,f"✅ 🎉 TEST BUY SUCCESS! 🎉\n\n📈 Pair: {test_pair}\n💵 Amount: $10\n🆔 ID: {tid}\n\n⏰ Waiting 65 seconds for result... ⏳\n🤞 Fingers crossed! 🍀")
+            bot.send_message(m.chat.id,f"✅ 🎉 BUY {test_pair} ID {tid} ⏳ 65s...")
             time.sleep(65)
             with IQ_LOCK: profit=Iq.check_win_v3(tid); bal=Iq.get_balance()
-            if profit>0:
-                bot.send_message(m.chat.id,f"💰 🏆 WINNER WINNER! 🏆 💰\n\n💵 Profit: +${round(profit,2)} 🤑\n💳 Balance: ${round(bal,2)} 💎\n🎉 Great! Auto-trading will work! 🚀")
-            else:
-                bot.send_message(m.chat.id,f"📉 😢 LOSS but BUY WORKS! ✅\n\n💸 Loss: ${round(profit,2)}\n💳 Balance: ${round(bal,2)}\n💪 Next trade will be bigger! 🔄")
+            bot.send_message(m.chat.id,f"{'🏆 WIN' if profit>0 else '📉 LOSS'} {profit} Bal ${round(bal,2)}")
         else:
-            bot.send_message(m.chat.id,f"❌ 😭 Buy failed on {test_pair}\n📝 Reason: {tid}\n🔄 Trying other pairs...")
+            bot.send_message(m.chat.id,f"❌ Failed {test_pair}: {tid}")
     except Exception as e:
-        bot.send_message(m.chat.id,f"❌ 🛑 Test error: {e} 😵")
-
-@bot.message_handler(commands=['loosetrade'])
-def loosetrade(m):
-    global OWNER_ID; OWNER_ID=m.chat.id
-    bot.send_message(m.chat.id,"🔥 🚀 LOOSE MODE ACTIVATED! 🚀 🔥\n🎯 Will trade ANY trend! 😈")
-    threading.Thread(target=do_trade, daemon=True).start()
+        bot.send_message(m.chat.id,f"❌ {e}")
 
 def do_trade():
-    global LAST_SIGNAL, current_amount, martingale_level
+    global LAST_SIGNAL, current_amount, martingale_level, LAST_TRADE
     if not OWNER_ID: return
     if Iq is None: iq_connect_force()
     PAIRS=get_open_pairs(); random.shuffle(PAIRS)
-    try: bot.send_message(OWNER_ID,f"🔍 📡 Scanning {len(PAIRS)} open markets... 👀\n📋 {', '.join(PAIRS[:4])}...\n💵 Trading with ${current_amount} 🎯")
+    try: bot.send_message(OWNER_ID,f"🔍 📡 Scanning {len(PAIRS)}... 💵 ${current_amount} 🧠 Remembered!")
     except: pass
     for pair in PAIRS:
         direction,reason=analyze_loose(pair)
@@ -199,25 +249,34 @@ def do_trade():
                     status,tid=Iq.buy(current_amount,pair,direction,1)
                 if not status: continue
                 emoji = "📈 🚀" if direction=="call" else "📉 🧸"
-                bot.send_message(OWNER_ID,f"✅ {emoji} TRADE PLACED! {emoji}\n\n📊 Pair: {pair}\n🎯 Direction: {direction.upper()} {emoji}\n💵 Amount: ${current_amount}\n📝 Reason: {reason}\n⏰ Expiry: 1 minute ⏳\n\n🤞 Good luck! 🍀")
+                bot.send_message(OWNER_ID,f"✅ {emoji} TRADE PLACED!\n📊 {pair}\n🎯 {direction.upper()}\n💵 ${current_amount}\n📝 {reason}")
                 time.sleep(65)
                 with IQ_LOCK: profit=Iq.check_win_v3(tid); bal=Iq.get_balance()
                 LAST_SIGNAL=time.time()
+                LAST_TRADE = {
+                    "pair": pair,
+                    "dir": direction.upper(),
+                    "amount": current_amount,
+                    "profit": round(profit,2) if profit else 0,
+                    "time": datetime.datetime.now().strftime("%H:%M:%S %d/%m")
+                }
                 if profit and profit>0:
-                    bot.send_message(OWNER_ID,f"💰 🎉💰 JACKPOT! 💰🎉 💰\n\n🏆 WIN! +${round(profit,2)} 🤑\n💳 Balance: ${round(bal,2)} 💎\n🔄 Resetting to ${BASE_AMOUNT} ✨\n\n🚀 Next scan in 3 mins... ⏰")
+                    bot.send_message(OWNER_ID,f"💰 🎉 JACKPOT! +${round(profit,2)} 🤑\n💳 ${round(bal,2)} 💎\n🔄 Reset to ${BASE_AMOUNT} ✨")
                     current_amount=BASE_AMOUNT; martingale_level=0
                 else:
                     martingale_level+=1
                     if martingale_level>=MAX_MARTINGALE:
-                        bot.send_message(OWNER_ID,f"📉 😭 Oops! LOSS! 😭\n\n💸 Lost: ${current_amount}\n💳 Balance: ${round(bal,2)}\n🔄 Martingale reset! Starting fresh at ${BASE_AMOUNT} 🌱\n\n💪 Don't worry, we got next one! 🔥")
+                        bot.send_message(OWNER_ID,f"📉 😭 LOSS! Reset! 🌱\n💳 ${round(bal,2)}")
                         current_amount=BASE_AMOUNT; martingale_level=0
                     else:
                         current_amount=BASE_AMOUNT*(2**martingale_level)
-                        bot.send_message(OWNER_ID,f"📉 😢 Loss! But we double down! 💪\n\n💳 Balance: ${round(bal,2)}\n💵 Next Amount: ${current_amount} 🎯\n🪜 Level: {martingale_level} / {MAX_MARTINGALE} 📈\n\n🔥 Revenge trade incoming! 😈")
+                        bot.send_message(OWNER_ID,f"📉 😢 Loss! Next ${current_amount} 🪜 {martingale_level}")
+                save_memory() # SAVE AFTER EVERY TRADE!
                 return
             except: continue
     LAST_SIGNAL=time.time()
-    try: bot.send_message(OWNER_ID,f"⏭️ 💤 No strong signal found! 😴\n💵 Still at ${current_amount}\n🔍 Will try again in 3 mins... ⏰👀")
+    save_memory()
+    try: bot.send_message(OWNER_ID,f"⏭️ 💤 No signal 💵 ${current_amount} 🧠")
     except: pass
 
 def scanner_loop():
@@ -242,5 +301,6 @@ def polling_loop():
 
 threading.Thread(target=scanner_loop, daemon=True).start()
 threading.Thread(target=polling_loop, daemon=True).start()
+
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)), use_reloader=False)
