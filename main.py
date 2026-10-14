@@ -2,12 +2,14 @@ import os, time, threading, random, datetime
 from flask import Flask
 import telebot
 
-print("=== KEVIN V25 FINAL - NO CONFLICT ===", flush=True)
+print("=== KEVIN V25 FINAL - 409 FIXED ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 EMAIL = os.getenv("IQ_EMAIL")
 PASS = os.getenv("IQ_PASSWORD")
+
+print(f"Token OK: {bool(TOKEN)} | IQ Email: {EMAIL}", flush=True)
 
 # === SETTINGS ===
 BASE_AMOUNT = 10
@@ -82,12 +84,11 @@ def home():
     except: b="?"
     return f"V25 LIVE BAL {b} AMT {current_amount} LVL {martingale_level}"
 
-# === TELEGRAM BOT WITH AUTO WEBHOOK FIX ===
+# === TELEGRAM BOT ===
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# THIS FIXES YOUR 404 + CONFLICT ERROR
 try:
-    print("Removing old webhook...", flush=True)
+    print("Removing webhook...", flush=True)
     bot.remove_webhook()
     time.sleep(3)
     print("Webhook removed OK", flush=True)
@@ -102,7 +103,7 @@ def start(m):
     if not Iq: iq_connect()
     try: bal=round(Iq.get_balance(),2)
     except: bal="?"
-    bot.send_message(m.chat.id, f"🤖 KEVIN V25 LIVE FIXED\nBal ${bal}\nBase ${BASE_AMOUNT} Max x{MAX_MARTINGALE}\n$10 -> $20 -> $40 then reset\n/resume /pause /balance /scan")
+    bot.send_message(m.chat.id, f"🤖 KEVIN V25 LIVE FIXED ✅\nBal ${bal}\nBase ${BASE_AMOUNT} Max x{MAX_MARTINGALE}\n$10 -> $20 -> $40 then reset\n/resume /pause /balance /scan")
 
 @bot.message_handler(commands=['resume'])
 def resume(m):
@@ -180,11 +181,21 @@ def scanner():
 def bot_polling():
     while True:
         try:
-            print("Polling started...", flush=True)
-            bot.infinity_polling(timeout=60, long_polling_timeout=60, none_stop=True)
-        except Exception as e:
-            print(f"Polling error {e}, retry in 5s", flush=True)
+            print("Removing webhook again...", flush=True)
+            bot.remove_webhook()
             time.sleep(5)
+            print("Polling started... 409 fixed", flush=True)
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, none_stop=True, skip_pending=True)
+        except Exception as e:
+            err = str(e)
+            print(f"Polling error {err[:300]}", flush=True)
+            if "409" in err or "Conflict" in err:
+                print("409 Conflict - waiting 20s for old bot to die...", flush=True)
+                time.sleep(20)
+                try: bot.remove_webhook()
+                except: pass
+            else:
+                time.sleep(5)
 
 threading.Thread(target=scanner, daemon=True).start()
 threading.Thread(target=bot_polling, daemon=True).start()
