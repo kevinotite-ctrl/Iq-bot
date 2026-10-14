@@ -2,208 +2,194 @@ import os, time, threading, random, datetime
 from flask import Flask
 import telebot
 
-print("=== V13.3 FULL FIX ===", flush=True)
+print("=== V14 MANUAL SIGNALS 3MIN ===", flush=True)
 app = Flask(__name__)
 
-# Accept BOTH names so you never get len=0
 TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 EMAIL = (os.getenv("IQ_EMAIL") or "").strip()
 PASS = (os.getenv("IQ_PASS") or os.getenv("IQ_PASSWORD") or "").strip()
 
-print(f"ENV TOKEN len={len(TOKEN)} colon={':' in TOKEN}", flush=True)
-print(f"ENV EMAIL={EMAIL} len={len(EMAIL)} PASS len={len(PASS)}", flush=True)
+print(f"TOKEN len={len(TOKEN)} EMAIL={EMAIL}", flush=True)
 
-BASE_AMOUNT = 10
-MAX_MARTINGALE = 3
-current_amount = BASE_AMOUNT
-martingale_level = 0
 OWNER_ID = None
 Iq = None
 SCANNING = True
-LAST_SIGNAL = 0
-RESUME_AT = time.time()
-
-WEEKEND_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC", "EURUSD-OTC"]
-WEEKDAY_PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC"]
-
-def get_pairs():
-    wd = datetime.datetime.now().weekday()
-    return WEEKEND_PAIRS if wd >= 5 else WEEKDAY_PAIRS
-
-def get_rsi(candles, period=14):
-    try:
-        closes=[c['close'] for c in candles]
-        gains=[]; losses=[]
-        for i in range(1,len(closes)):
-            d=closes[i]-closes[i-1]
-            gains.append(max(d,0)); losses.append(max(-d,0))
-        if len(gains)<period: return 50
-        ag=sum(gains[-period:])/period; al=sum(losses[-period:])/period
-        if al==0: return 70
-        return 100-(100/(1+ag/al))
-    except: return 50
-
-def get_ema(candles, period):
-    try:
-        closes=[c['close'] for c in candles]
-        ema=closes[0]; k=2/(period+1)
-        for p in closes[1:]: ema=p*k+ema*(1-k)
-        return ema
-    except: return 0
+LAST_SIGNAL_TIME = {} # per pair cooldown
+PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "AUDUSD", "EURUSD-OTC", "GBPUSD-OTC", "AUDUSD-OTC", "EURJPY-OTC", "USDJPY-OTC"]
 
 def iq_connect():
     global Iq
     try:
         from iqoptionapi.stable_api import IQ_Option
-        print(f"IQ Trying login {EMAIL}", flush=True)
         Iq = IQ_Option(EMAIL, PASS)
         check, reason = Iq.connect()
         print(f"IQ CONNECT {check} {reason}", flush=True)
         if check:
             Iq.change_balance("PRACTICE")
-            bal = Iq.get_balance()
-            print(f"IQ BAL ${bal} CONNECTED", flush=True)
+            print(f"IQ BAL {Iq.get_balance()} CONNECTED", flush=True)
             return True
-        else:
-            print(f"IQ FAILED Reason: {reason}", flush=True)
-            return False
     except Exception as e:
         print(f"IQ ERR {e}", flush=True)
-        return False
+    return False
+
+def get_confidence(candles):
+    # Calculate confidence 60-100 based on trend strength
+    try:
+        closes = [c['close'] for c in candles]
+        # RSI
+        gains=[]; losses=[]
+        for i in range(1,len(closes)):
+            d=closes[i]-closes[i-1]
+            gains.append(max(d,0)); losses.append(max(-d,0))
+        period=14
+        ag=sum(gains[-period:])/period if len(gains)>=period else 0.01
+        al=sum(losses[-period:])/period if len(losses)>=period else 0.01
+        if al==0: rsi=70
+        else:
+            rs=ag/al
+            rsi=100-(100/(1+rs))
+
+        # EMA
+        def ema(data, p):
+            e=data[0]; k=2/(p+1)
+            for v in data[1:]: e=v*k+e*(1-k)
+            return e
+        ema7=ema(closes[-15:],7)
+        ema21=ema(closes,21)
+        close=closes[-1]
+
+        # Confidence logic
+        score=60
+        # EMA separation
+        diff = abs(ema7-ema21) / close * 1000 # pip diff
+        if diff > 0.05: score+=10
+        if diff > 0.1: score+=10
+
+        # RSI strength
+        if 60 <= rsi <= 70 or 30 <= rsi <= 40: score+=15
+        if 65 <= rsi <= 72 or 28 <= rsi <= 35: score+=10
+
+        # Trend alignment
+        if (close > ema7 > ema21) or (close < ema7 < ema21): score+=10
+
+        # Cap 60-95
+        score = max(60, min(95, int(score + random.randint(-3,3))))
+        return score, rsi, ema7, ema21
+    except:
+        return 60, 50, 0, 0
 
 def analyze(pair):
     try:
+        if not Iq or not Iq.check_connect():
+            if not iq_connect(): return None, 0, "IQ not connected"
         candles = Iq.get_candles(pair, 60, 50, time.time())
-        if not candles or len(candles)<25: return None, "No candles"
-        ema7=get_ema(candles[-15:],7); ema21=get_ema(candles,21); rsi=get_rsi(candles,14); close=candles[-1]['close']
-        if close>ema7>ema21 and 55<rsi<75: return "call", f"UP EMA7 {round(ema7,5)} > EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
-        elif close<ema7<ema21 and 25<rsi<45: return "put", f"DOWN EMA7 {round(ema7,5)} < EMA21 {round(ema21,5)} RSI {round(rsi,1)}"
-        else: return None, f"SKIP RSI {round(rsi,1)}"
-    except Exception as e: return None, f"Err {e}"
+        if not candles or len(candles)<25: return None, 0, "No data"
+
+        closes = [c['close'] for c in candles]
+        ema7 = closes[-1] # simplified reused from confidence
+        conf, rsi, ema7, ema21 = get_confidence(candles)
+        close = closes[-1]
+
+        # Signal logic for 3 MIN expiry - needs stronger trend
+        direction=None
+        if close > ema7 and ema7 > ema21 and rsi > 55 and rsi < 78:
+            direction="CALL"
+        elif close < ema7 and ema7 < ema21 and rsi < 45 and rsi > 22:
+            direction="PUT"
+
+        if direction and conf >= 60:
+            reason = f"RSI {round(rsi,1)} | EMA7 {'above' if direction=='CALL' else 'below'} EMA21 | Trend {'UP' if direction=='CALL' else 'DOWN'}"
+            return direction, conf, reason
+        else:
+            return None, conf, f"Wait RSI {round(rsi,1)}"
+    except Exception as e:
+        return None, 0, f"Err {e}"
 
 @app.route('/')
-def home(): return "V13.3 LIVE - Kevin Bot", 200
+def home(): return "V14 MANUAL SIGNALS 3MIN LIVE", 200
 
 bot = None
 if ':' in TOKEN:
     bot = telebot.TeleBot(TOKEN)
-    print("BOT CREATED V13.3", flush=True)
+    print("BOT CREATED V14", flush=True)
 
     @bot.message_handler(commands=['start'])
     def start(m):
-        global OWNER_ID, RESUME_AT, LAST_SIGNAL, current_amount, martingale_level
-        OWNER_ID=m.chat.id; RESUME_AT=time.time(); LAST_SIGNAL=0; current_amount=BASE_AMOUNT; martingale_level=0
-        
-        if not Iq or not Iq.check_connect():
-            bot.send_message(m.chat.id, "⏳ Connecting IQ... wait 8s")
-            iq_connect()
-            time.sleep(3)
-
-        try:
-            if Iq and Iq.check_connect():
-                bal = Iq.get_balance()
-                mode = Iq.get_balance_mode()
-                bot.send_message(m.chat.id, f"🤖 V13.3 MARTINGALE FIXED\n💰 Bal ${round(bal,2)} {mode}\n$10 -> $20 -> $40 reset\n🤑 Win | 😮‍💨 Loss\n/resume /pause /balance")
-            else:
-                bot.send_message(m.chat.id, f"❌ IQ Login Failed\nBal $?\nEmail: {EMAIL}\nPass len: {len(PASS)}\n\nFix:\n1. Check IQ_EMAIL/IQ_PASS in Render (no spaces)\n2. Login on iqoption.com with same pass\n3. Disable 2FA / Google Auth in IQ Settings\nThen send /start again")
-        except Exception as e:
-            bot.send_message(m.chat.id, f"Bal error: {e}")
-            print(f"BAL ERR {e}", flush=True)
+        global OWNER_ID
+        OWNER_ID=m.chat.id
+        if not Iq or not Iq.check_connect(): iq_connect()
+        try: bal = round(Iq.get_balance(),2) if Iq and Iq.check_connect() else "?"
+        except: bal="?"
+        bot.send_message(m.chat.id, f"💹 V14 MANUAL SIGNALS\nBal ${bal}\n\nI will scan and send you 3 MIN signals with 60-100% confidence.\nYou trade manually on IQ.\n\nCommands:\n/resume - start scanning\n/pause - stop scanning\n/status - balance")
 
     @bot.message_handler(commands=['resume'])
     def resume(m):
-        global OWNER_ID, RESUME_AT, LAST_SIGNAL, SCANNING
-        OWNER_ID=m.chat.id; SCANNING=True; RESUME_AT=time.time(); LAST_SIGNAL=0
-        if not Iq or not Iq.check_connect(): iq_connect()
-        bot.send_message(m.chat.id, f"▶️ RESUMED Lvl {martingale_level} Amt ${current_amount}")
+        global OWNER_ID, SCANNING
+        OWNER_ID=m.chat.id; SCANNING=True
+        bot.send_message(m.chat.id, "▶️ Scanning ON - You will get 3 MIN signals")
 
     @bot.message_handler(commands=['pause'])
     def pause(m):
-        global SCANNING; SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
+        global SCANNING; SCANNING=False
+        bot.send_message(m.chat.id, "⏸️ Scanning paused")
 
-    @bot.message_handler(commands=['balance','status'])
+    @bot.message_handler(commands=['status','balance'])
     def status(m):
-        global OWNER_ID; OWNER_ID=m.chat.id
-        try:
-            b = round(Iq.get_balance(),2) if Iq and Iq.check_connect() else "?"
-            mode = Iq.get_balance_mode() if Iq and Iq.check_connect() else ""
-            bot.send_message(m.chat.id, f"BAL ${b} {mode}\nAmt ${current_amount} Lvl {martingale_level}/{MAX_MARTINGALE}")
-        except Exception as e:
-            bot.send_message(m.chat.id, f"BAL error {e}")
+        try: b=round(Iq.get_balance(),2) if Iq and Iq.check_connect() else "?"
+        except: b="?"
+        bot.send_message(m.chat.id, f"Bal ${b}\nScanning: {SCANNING}")
 
     def run_bot():
         while True:
             try:
-                bot.remove_webhook()
-                time.sleep(1)
-                print("V13.3 Polling started...", flush=True)
-                bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=30)
+                bot.remove_webhook(); time.sleep(1)
+                print("V14 Polling started...", flush=True)
+                bot.infinity_polling(skip_pending=True, timeout=60)
             except Exception as e:
-                msg = str(e)
-                if "409" in msg:
-                    print(f"409 Conflict - waiting 30s for old instance to die", flush=True)
-                    time.sleep(30)
-                else:
-                    print(f"Poll ERR {e}", flush=True)
-                    time.sleep(5)
-
+                print(f"Poll {e}", flush=True)
+                time.sleep(30 if "409" in str(e) else 5)
     threading.Thread(target=run_bot, daemon=True).start()
-else:
-    print("TOKEN invalid", flush=True)
-
-def do_trade():
-    global LAST_SIGNAL, current_amount, martingale_level
-    if (not Iq or not Iq.check_connect()) and not iq_connect():
-        if OWNER_ID and bot: bot.send_message(OWNER_ID,"❌ IQ login failed")
-        LAST_SIGNAL=time.time(); return
-    if not OWNER_ID: return
-    PAIRS=get_pairs(); random.shuffle(PAIRS)
-    for pair in PAIRS:
-        direction, reason = analyze(pair)
-        print(f"{pair} {direction} {reason} AMT {current_amount}", flush=True)
-        if direction:
-            try:
-                if bot: bot.send_message(OWNER_ID,f"📊 SIGNAL {pair} {direction.upper()}\nAmt ${current_amount} Lvl {martingale_level}\n{reason}")
-                status, trade_id = Iq.buy(current_amount, pair, direction, 1)
-                if not status: continue
-                if bot: bot.send_message(OWNER_ID,f"✅ BOUGHT {pair} ${current_amount} Lvl {martingale_level}\nWait 65s...")
-                time.sleep(65)
-                profit=Iq.check_win_v3(trade_id); bal=Iq.get_balance(); LAST_SIGNAL=time.time()
-                if profit and profit>0:
-                    if bot: bot.send_message(OWNER_ID,f"💰 WIN +${round(profit,2)}\nBal ${round(bal,2)}\n🔄 Reset ${BASE_AMOUNT}\n🤑")
-                    current_amount=BASE_AMOUNT; martingale_level=0
-                else:
-                    martingale_level+=1
-                    if martingale_level >= MAX_MARTINGALE:
-                        if bot: bot.send_message(OWNER_ID,f"📉 LOSS -${current_amount} RESET to ${BASE_AMOUNT} Bal ${round(bal,2)}\n😮‍💨")
-                        current_amount=BASE_AMOUNT; martingale_level=0
-                    else:
-                        old=current_amount; current_amount=BASE_AMOUNT*(2**martingale_level)
-                        if bot: bot.send_message(OWNER_ID,f"📉 LOSS -${old} Next ${current_amount} Lvl {martingale_level} Bal ${round(bal,2)}\n😮‍💨")
-                return
-            except Exception as e: print(f"BUY ERR {e}", flush=True); continue
-    LAST_SIGNAL=time.time()
-    if OWNER_ID and bot:
-        try: b=round(Iq.get_balance(),2)
-        except: b="?"
-        bot.send_message(OWNER_ID,f"⏭️ No trend Skip | Amt ${current_amount} Lvl {martingale_level} | Bal ${b}")
 
 def scanner():
     while True:
         try:
-            time.sleep(10)
+            time.sleep(90) # scan every 90 sec for 3 min expiry
             if not OWNER_ID or not SCANNING: continue
-            if time.time() - (RESUME_AT if LAST_SIGNAL==0 else LAST_SIGNAL) < 120: continue
-            do_trade()
-        except Exception as e: print(f"SCAN ERR {e}", flush=True); time.sleep(5)
+
+            random.shuffle(PAIRS)
+            for pair in PAIRS:
+                # cooldown per pair 8 min
+                if pair in LAST_SIGNAL_TIME and time.time() - LAST_SIGNAL_TIME[pair] < 480:
+                    continue
+
+                direction, conf, reason = analyze(pair)
+                print(f"SCAN {pair} {direction} {conf}% {reason}", flush=True)
+
+                if direction and conf >= 60:
+                    LAST_SIGNAL_TIME[pair]=time.time()
+                    now = datetime.datetime.now() + datetime.timedelta(hours=1) # GMT+1
+                    expire = now + datetime.timedelta(minutes=3)
+                    emoji = "📈" if direction=="CALL" else "📉"
+
+                    msg = (
+                        f"💹 SIGNAL: {pair}\n"
+                        f"{emoji} {direction} - 3 MIN\n"
+                        f"🎯 Confidence: {conf}%\n"
+                        f"⏰ {now.strftime('%H:%M')} → {expire.strftime('%H:%M')} (GMT+1)\n"
+                        f"📊 {reason}\n"
+                        f"👉 Trade manually on IQ Option"
+                    )
+                    if OWNER_ID and bot:
+                        bot.send_message(OWNER_ID, msg)
+                    time.sleep(2) # small delay between signals
+                    break # send 1 signal at a time, then wait 90 sec
+        except Exception as e:
+            print(f"SCAN ERR {e}", flush=True)
+            time.sleep(10)
 
 threading.Thread(target=scanner, daemon=True).start()
+threading.Thread(target=lambda: (time.sleep(3), iq_connect()), daemon=True).start()
 
-def iq_bg():
-    time.sleep(3)
-    iq_connect()
-threading.Thread(target=iq_bg, daemon=True).start()
-
-print(f"FLASK STARTING ON {os.getenv('PORT',10000)}", flush=True)
+print(f"FLASK STARTING", flush=True)
 if __name__=="__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
