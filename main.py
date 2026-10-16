@@ -16,7 +16,7 @@ PRICE = "$10/month"
 
 OWNER_ID = None
 SCANNING = True
-PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "AUDUSD", "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "USDJPY-OTC", "GBPJPY-OTC"]
+PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "AUDUSD"]
 PAID_FILE = "paid_users.json"
 FREE_FILE = "free_users.json"
 
