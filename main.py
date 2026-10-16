@@ -1,237 +1,254 @@
-import os, time, threading, random, datetime, json, requests
+# -*- coding: utf-8 -*-
+import os, requests, time, threading, telebot, datetime, json
+from telebot import types
 from flask import Flask, request
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-print("=== V20 OWNER CONTROL + 2 FREE + INTRO ===", flush=True)
-app = Flask(__name__)
+BOT_TOKEN=os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID="@KEVINTRAILBLAZE"
+ADMIN_ID=os.environ.get("ADMIN_ID")
+ADMIN_CHAT_ID=None
 
-TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
-RENDER_URL = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
-CHANNEL_ID = "@trailblazeebot"
-CHANNEL_LINK = "https://t.me/trailblazeebot"
-OWNER_USERNAME = "@kevintraiblazer"
-IQ_LINK = "https://iqoption.com/en/register"
-PRICE = "$10/month"
+bot=telebot.TeleBot(BOT_TOKEN)
+prices_history=[]
+last_signal_time={}
+pending_signals={}
+ACTIVE_FILE="active_signals.json"
 
-OWNER_ID = None
-SCANNING = True
-PAIRS = ["EURUSD", "GBPUSD", "EURJPY", "USDJPY", "AUDUSD", "EURUSD-OTC", "GBPUSD-OTC", "EURJPY-OTC", "USDJPY-OTC", "GBPJPY-OTC"]
-PAID_FILE = "paid_users.json"
-FREE_FILE = "free_users.json"
-
-def load_json(f):
+def save_active():
     try:
-        if os.path.exists(f):
-            with open(f,'r') as fp: return json.load(fp)
-    except: pass
-    return {}
-def save_json(f,data):
-    try:
-        with open(f,'w') as fp: json.dump(fp,data)
+        with open(ACTIVE_FILE,"w") as f:
+            json.dump(active_signals,f)
     except: pass
 
-PAID_USERS = load_json(PAID_FILE)
-FREE_USERS = load_json(FREE_FILE) # {id: count}
+def load_active():
+    global active_signals
+    try:
+        if os.path.exists(ACTIVE_FILE):
+            with open(ACTIVE_FILE,"r") as f:
+                active_signals=json.load(f)
+        else:
+            active_signals=[]
+    except:
+        active_signals=[]
 
-def is_paid(uid):
-    if OWNER_ID and str(uid)==str(OWNER_ID): return True
-    if str(uid) in PAID_USERS and time.time() < PAID_USERS[str(uid)]: return True
-    return False
+active_signals=[]
+load_active()
 
-def can_send_free(uid):
-    if is_paid(uid): return True
-    return FREE_USERS.get(str(uid),0) < 2
+app=Flask(__name__)
+@app.route('/')
+def home():
+    return f"KEVIN GOLD ONLY V4 LIVE | Active {len(active_signals)} | Gold Price ${get_gold()}"
 
-def use_free(uid):
-    if is_paid(uid): return
-    FREE_USERS[str(uid)] = FREE_USERS.get(str(uid),0)+1
-    save_json(FREE_FILE, FREE_USERS)
-    if FREE_USERS[str(uid)] >= 2:
-        try: bot.send_message(uid, f"🔒 FREE TRIAL OVER!\nPay {PRICE} to {OWNER_USERNAME} for unlimited signals 🚀")
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    try:
+        json_str = request.get_data().decode('UTF-8')
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+    except: pass
+    return "OK", 200
+
+@app.route('/setwebhook')
+def set_webhook():
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        ext_url = os.getenv("RENDER_EXTERNAL_URL")
+        if ext_url:
+            url = f"{ext_url}/{BOT_TOKEN}"
+            bot.set_webhook(url=url)
+            return f"Webhook set to {url}"
+        return "No URL"
+    except Exception as e:
+        return f"Error {e}"
+
+def get_gold():
+    try:
+        r=requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
+        return float(r["price"])
+    except:
+        return 4195.60
+
+def calc_rsi(prices, period=14):
+    if len(prices) < period+1:
+        return 50.0
+    gains=[]; losses=[]
+    for i in range(1, len(prices)):
+        diff=prices[i]-prices[i-1]
+        if diff>0:
+            gains.append(diff); losses.append(0)
+        else:
+            gains.append(0); losses.append(abs(diff))
+    if len(gains)<period:
+        return 50.0
+    avg_gain=sum(gains[-period:])/period
+    avg_loss=sum(losses[-period:])/period
+    if avg_loss==0: return 70.0
+    if avg_gain==0: return 30.0
+    rs=avg_gain/avg_loss
+    return 100-(100/(1+rs))
+
+def build_short_msg(symbol, price, rsi, action):
+    sl=price-10 if action=="BUY" else price+10
+    tp1=price+20 if action=="BUY" else price-20
+    tp2=price+40 if action=="BUY" else price-40
+    tp3=price+60 if action=="BUY" else price-60
+    emoji="🟢 BUY" if action=="BUY" else "🔴 SELL"
+    msg="👑 KEVIN TRAILBLAZE 👑\n"+emoji+" XAUUSD GOLD\n\n💠 Entry: $"+str(round(price,2))+"\n🛡️ SL: $"+str(round(sl,2))+"\n\n🎯 TP1: $"+str(round(tp1,2))+"\n🎯 TP2: $"+str(round(tp2,2))+"\n🎯 TP3: $"+str(round(tp3,2))+"\n\n📊 RSI: "+str(round(rsi,1))+"\n🔗 @KEVINTRAILBLAZE"
+    data={"symbol":symbol,"action":action,"entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"tp3":tp3}
+    return msg,data
+
+def request_approval(symbol, price, rsi, action):
+    global ADMIN_CHAT_ID
+    target=None
+    if ADMIN_ID:
+        try: target=int(ADMIN_ID)
         except: pass
-
-def get_expiry(uid):
-    if str(uid) not in PAID_USERS: return "Not paid"
-    return datetime.datetime.fromtimestamp(PAID_USERS[str(uid)]).strftime('%d %b %Y')
-
-def analyze(pair):
-    rsi=round(random.uniform(28,72),1)
-    ema=random.choice(["UP","DOWN"])
-    d="CALL" if (ema=="UP" and rsi>50) else "PUT"
-    c=random.randint(90,99)
-    reason="Up momentum" if d=="CALL" else "Down momentum"
-    return d,c,rsi,ema,reason
-
-bot = telebot.TeleBot(TOKEN, threaded=False) if ':' in TOKEN else None
-
-if bot:
-    @bot.message_handler(commands=['start'])
-    def start(m):
-        global OWNER_ID
-        if OWNER_ID is None:
-            OWNER_ID=m.chat.id
-            print(f"Owner set {OWNER_ID}", flush=True)
-        uid=m.chat.id
-        if OWNER_ID and uid==OWNER_ID:
-            bot.send_message(uid, f"👑 OWNER MODE - FREE FOR LIFE\n\n/resume - start scanning\n/pause - pause\n/test - test signal\n/paidlist - see paid\n/approve ID 30 - approve\n\nChannel: {CHANNEL_LINK}")
-            return
-        if is_paid(uid):
-            bot.send_message(uid, f"💹 ACTIVE till {get_expiry(uid)}\nSignals coming! 🚀\nChannel: {CHANNEL_LINK}")
-            return
-
-        # NEW USER - FULL INTRO
-        free_left = 2 - FREE_USERS.get(str(uid),0)
-        txt = f"""🚀 **WELCOME TO KEVIN IQ SNIPER BOT** 💹
-
-I scan IQ Option 24/7 and send ONLY 90-100% signals!
-
-📊 What I do:
-✅ 10 Pairs (EURUSD, GBPUSD, OTC)
-✅ Only 90%+ confidence
-✅ 3 MIN expiry with analysis
-✅ Entry + Expiry time
-
-🎁 **You have {free_left} FREE signals!**
-
-👉 **STEP 1: Join Channel:**
-📢 {CHANNEL_LINK}
-Tap to join 👆
-
-💼 **STEP 2: REGISTER ON IQ OPTION:**
-🔗 {IQ_LINK}
-1. Click link → Register email → Verify
-2. Deposit min $10 (Card/Opay/Crypto)
-3. Start with $30-$50 recommended
-
-⚠️ **STEP 3: RISK MANAGEMENT:**
-• 1% per trade only! ($50 = $1/trade)
-• Max 3 trades/day
-• Stop after 2 losses
-• No revenge trading!
-• No overtrading!
-
-💰 **After {free_left} free signals:**
-Pay {PRICE} to {OWNER_USERNAME} for unlimited!
-
-📩 Contact: {OWNER_USERNAME}
-
-Your first signal is coming soon! ⏳"""
-
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
-        markup.add(InlineKeyboardButton("💼 Register IQ Option", url=IQ_LINK))
-        markup.add(InlineKeyboardButton(f"💬 Contact {OWNER_USERNAME}", url=f"https://t.me/kevintraiblazer"))
-        bot.send_message(uid, txt, reply_markup=markup)
-
-    @bot.message_handler(commands=['approve'])
-    def approve(m):
-        if OWNER_ID and m.chat.id!=OWNER_ID: return
+    if not target: target=ADMIN_CHAT_ID
+    short_msg,data=build_short_msg(symbol, price, rsi, action)
+    if not target:
         try:
-            parts=m.text.split(); user_id=parts[1]; days=int(parts[2]) if len(parts)>2 else 30
-            PAID_USERS[str(user_id)]=time.time()+days*24*3600; save_json(PAID_FILE, PAID_USERS)
-            bot.send_message(m.chat.id, f"✅ Approved {user_id} {days} days till {get_expiry(user_id)}")
-            try: bot.send_message(int(user_id), f"✅ ACTIVATED {days} days! You now get unlimited signals 🚀")
-            except: pass
-        except: bot.send_message(m.chat.id, "Use: /approve USER_ID 30")
+            bot.send_message(CHANNEL_ID, short_msg)
+            active_signals.append({"symbol":data["symbol"],"action":data["action"],"entry":data["entry"],"sl":data["sl"],"tp1":data["tp1"],"tp2":data["tp2"],"tp3":data["tp3"],"tp1_hit":False,"tp2_hit":False,"tp3_hit":False})
+            save_active()
+        except Exception as e: print(e)
+        return
+    sig_id=symbol+"_"+str(int(time.time()))
+    pending_signals[sig_id]=data
+    pending_signals[sig_id]["_msg"]=short_msg
+    markup=types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✅ SEND", callback_data="approve_"+sig_id), types.InlineKeyboardButton("❌ REJECT", callback_data="reject_"+sig_id))
+    try:
+        bot.send_message(target, "🔔 NEW GOLD SIGNAL 👑\n\n"+short_msg+"\n\nSend to channel?", reply_markup=markup)
+    except Exception as e: print(e)
 
-    @bot.message_handler(commands=['remove','paidlist','resume','pause','test'])
-    def other(m):
-        global SCANNING, OWNER_ID
-        if OWNER_ID and m.chat.id!=OWNER_ID: bot.send_message(m.chat.id,"Owner only"); return
-        if m.text.startswith("/remove"):
-            try: del PAID_USERS[m.text.split()[1]]; save_json(PAID_FILE, PAID_USERS); bot.send_message(m.chat.id,"Removed")
-            except: bot.send_message(m.chat.id,"Use /remove ID")
-        elif m.text.startswith("/paidlist"):
-            if not PAID_USERS: bot.send_message(m.chat.id,"No paid"); return
-            t="💰 Paid:\n";
-            for k,v in PAID_USERS.items(): t+=f"{k} - {get_expiry(k)}\n"
-            bot.send_message(m.chat.id,t)
-        elif m.text.startswith("/resume"): SCANNING=True; bot.send_message(m.chat.id,"▶️ Scanning ON - Will ask you before sending")
-        elif m.text.startswith("/pause"): SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
-        elif m.text.startswith("/test"):
-            OWNER_ID=m.chat.id; pair=random.choice(PAIRS); d,c,rsi,ema,rsn=analyze(pair)
-            now=datetime.datetime.now()+datetime.timedelta(hours=1); exp=now+datetime.timedelta(minutes=3)
-            msg=f"🚨🚨 KEVIN IQ SNIPER 🚨🚨\n\n💱 {pair}\n{'📈' if d=='CALL' else '📉'} {d} - 3 MIN\n🔥 {c}% 💎\n\n📊 RSI:{rsi} | EMA:{ema} | {rsn}\n⏰ Entry:{now.strftime('%H:%M')} 🎯 Expiry:{exp.strftime('%H:%M')}\n\n👉 Trade {d} NOW!"
-            # Ask owner first
-            markup=InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("✅ YES Send to Channel & Paid", callback_data=f"send_{pair}_{d}_{c}_{rsi}_{ema}"))
-            markup.add(InlineKeyboardButton("❌ NO Skip", callback_data="skip"))
-            bot.send_message(m.chat.id, f"TEST SIGNAL FOUND:\n{msg}\n\nSend to channel?", reply_markup=markup)
-
-    @bot.callback_query_handler(func=lambda c: True)
-    def callback(call):
-        if OWNER_ID and call.message.chat.id!=OWNER_ID: return
-        if call.data=="skip":
-            bot.edit_message_text("❌ Skipped", call.message.chat.id, call.message.message_id); return
-        if call.data.startswith("send_"):
-            try:
-                _,pair,d,c,rsi,ema = call.data.split("_")
-                now=datetime.datetime.now()+datetime.timedelta(hours=1); exp=now+datetime.timedelta(minutes=3)
-                full=f"""🚨🚨 KEVIN IQ SNIPER 🚨🚨
-
-💱 Pair: {pair}
-{'📈' if d=='CALL' else '📉'} Direction: {d} - 3 MIN {'🔺' if d=='CALL' else '🔻'}
-🔥 Confidence: {c}% 💎 {'🔥🔥🔥' if int(c)>=95 else '🔥🔥'}
-
-📊 ANALYSIS:
-├ RSI: {rsi}
-├ Trend: EMA7 {'🟢 ABOVE' if ema=='UP' else '🔴 BELOW'} EMA21
-└ Momentum: {d} momentum 💪
-
-⏰ Entry: {now.strftime('%H:%M')}
-🎯 Expiry: {exp.strftime('%H:%M')}
-
-👉 ACTION: Trade {d} NOW! (3 min)
-⚠️ Risk: 1% only!
-
-#IQOption Paid {PRICE} {OWNER_USERNAME}"""
-                # send to paid + free trial
-                sent=0
-                all_ids = list(PAID_USERS.keys()) + list(FREE_USERS.keys()) + [str(OWNER_ID)]
-                for uid_str in set(all_ids):
-                    try:
-                        uid=int(uid_str)
-                        if not is_paid(uid) and not can_send_free(uid): continue
-                        bot.send_message(uid, "‼️signal alert incoming ‼️💰"); time.sleep(0.2)
-                        bot.send_message(uid, full); use_free(uid); sent+=1; time.sleep(0.3)
+def check_tp_hits(current_price, symbol):
+    to_remove=[]
+    for sig in active_signals[:]:
+        if sig["symbol"]!=symbol: continue
+        try:
+            s_sym=sig["symbol"]; s_act=sig["action"]; s_ent=sig["entry"]; s_tp1=sig["tp1"]; s_tp2=sig["tp2"]; s_tp3=sig["tp3"]; s_sl=sig["sl"]
+            if s_act=="BUY":
+                if not sig.get("tp1_hit", False) and current_price>=s_tp1:
+                    sig["tp1_hit"]=True; save_active()
+                    try: bot.send_message(CHANNEL_ID, f"💸 TP1 HIT ✅\n{s_sym} BUY\n${round(s_ent,2)} -> ${round(s_tp1,2)}\n🔒 Move SL to BE\n@KEVINTRAILBLAZE")
                     except: pass
-                try: bot.send_message(CHANNEL_ID, full)
-                except: pass
-                bot.edit_message_text(f"✅ SENT to {sent} users + channel {CHANNEL_ID}", call.message.chat.id, call.message.message_id)
-            except Exception as e: bot.send_message(call.message.chat.id, f"Error {e}")
+                if not sig.get("tp2_hit", False) and current_price>=s_tp2:
+                    sig["tp2_hit"]=True; save_active()
+                    try: bot.send_message(CHANNEL_ID, f"🏆 VICTORY 🏆\n{s_sym} TP1 + TP2 HIT\n@KEVINTRAILBLAZE")
+                    except: pass
+                if not sig.get("tp3_hit", False) and current_price>=s_tp3:
+                    try: bot.send_message(CHANNEL_ID, f"🤑 JACKPOT 🤑\n{s_sym} ALL TP HIT!\n${round(s_ent,2)} -> ${round(s_tp3,2)}\n@KEVINTRAILBLAZE")
+                    except: pass
+                    to_remove.append(sig)
+                if current_price<=s_sl:
+                    try: bot.send_message(CHANNEL_ID, f"🛑 SL HIT {s_sym}")
+                    except: pass
+                    to_remove.append(sig)
+            else:
+                if not sig.get("tp1_hit", False) and current_price<=s_tp1:
+                    sig["tp1_hit"]=True; save_active()
+                    try: bot.send_message(CHANNEL_ID, f"💸 TP1 HIT ✅\n{s_sym} SELL\n${round(s_ent,2)} -> ${round(s_tp1,2)}\n@KEVINTRAILBLAZE")
+                    except: pass
+                if not sig.get("tp2_hit", False) and current_price<=s_tp2:
+                    sig["tp2_hit"]=True; save_active()
+                    try: bot.send_message(CHANNEL_ID, f"🏆 VICTORY 🏆\n{s_sym} TP1 + TP2 HIT\n@KEVINTRAILBLAZE")
+                    except: pass
+                if not sig.get("tp3_hit", False) and current_price<=s_tp3:
+                    try: bot.send_message(CHANNEL_ID, f"🤑 JACKPOT 🤑\n{s_sym} ALL TP HIT!\n@KEVINTRAILBLAZE")
+                    except: pass
+                    to_remove.append(sig)
+                if current_price>=s_sl:
+                    try: bot.send_message(CHANNEL_ID, f"🛑 SL HIT {s_sym}")
+                    except: pass
+                    to_remove.append(sig)
+        except: continue
+    for r in to_remove:
+        if r in active_signals: active_signals.remove(r)
+    if to_remove: save_active()
 
-    @app.route(f'/{TOKEN}', methods=['POST'])
-    def webhook():
-        if request.headers.get('content-type')=='application/json':
-            js=request.get_data().decode('utf-8'); upd=telebot.types.Update.de_json(js); bot.process_new_updates([upd]); return ''
-        return 'ok',200
-    @app.route('/')
-    def home(): return "V20 OWNER CONTROL LIVE",200
-    def set_wh():
-        time.sleep(5)
-        if RENDER_URL:
-            try:
-                requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10); time.sleep(2)
-                url=f"{RENDER_URL}/{TOKEN}"; r=requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={url}", timeout=10); print(r.text, flush=True)
-            except Exception as e: print(e, flush=True)
-    threading.Thread(target=set_wh, daemon=True).start()
-
-def scanner():
+def signal_loop():
     while True:
         try:
-            time.sleep(45)
-            if not OWNER_ID or not SCANNING or not bot: continue
-            pair=random.choice(PAIRS); d,c,rsi,ema,rsn=analyze(pair)
-            if c<90: continue
-            # ASK OWNER FIRST, don't auto send
-            markup=InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton(f"✅ YES Send {pair} {d} {c}%", callback_data=f"send_{pair}_{d}_{c}_{rsi}_{ema}"))
-            markup.add(InlineKeyboardButton("❌ NO Skip", callback_data="skip"))
-            txt=f"🔔 SIGNAL FOUND!\n\n💱 {pair}\nDirection: {d}\nConf: {c}%\nRSI: {rsi}\n\nSend to channel + {len(PAID_USERS)} paid + free trial?"
-            bot.send_message(OWNER_ID, txt, reply_markup=markup)
-            time.sleep(300)
-        except Exception as e: print(f"SCAN ERR {e}", flush=True); time.sleep(10)
+            now=time.time()
+            g=get_gold()
+            prices_history.append(g)
+            if len(prices_history)>100: prices_history.pop(0)
+            r=calc_rsi(prices_history)
+            check_tp_hits(g,"GOLD")
+            print(f"GOLD ${g} RSI {r} Active {len(active_signals)}", flush=True)
+            # GOLD ONLY - No market close check, trade 24/7 since Gold now open
+            if r<30 or r>70:
+                has_gold=False
+                for s in active_signals:
+                    if s["symbol"]=="GOLD": has_gold=True
+                if not has_gold:
+                    if now-last_signal_time.get("GOLD",0)>3600: # 1 hour cooldown
+                        act="BUY" if r<30 else "SELL"
+                        request_approval("GOLD",g,r,act)
+                        last_signal_time["GOLD"]=now
+        except Exception as e:
+            print("loop error", e)
+        time.sleep(60)
 
-threading.Thread(target=scanner, daemon=True).start()
-if __name__=="__main__": app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
+    try:
+        d=call.data
+        if d.startswith("approve_"):
+            sid=d.replace("approve_","")
+            sd=pending_signals.pop(sid,None)
+            if not sd:
+                bot.answer_callback_query(call.id,"Done"); return
+            msg=sd.get("_msg")
+            bot.send_message(CHANNEL_ID, msg)
+            active_signals.append({"symbol":sd["symbol"],"action":sd["action"],"entry":sd["entry"],"sl":sd["sl"],"tp1":sd["tp1"],"tp2":sd["tp2"],"tp3":sd["tp3"],"tp1_hit":False,"tp2_hit":False,"tp3_hit":False})
+            save_active()
+            bot.answer_callback_query(call.id,"✅ Sent!")
+            bot.edit_message_text("✅ SENT to @KEVINTRAILBLAZE\n\n"+msg, call.message.chat.id, call.message.message_id)
+        elif d.startswith("reject_"):
+            pending_signals.pop(d.replace("reject_",""),None)
+            bot.answer_callback_query(call.id,"❌ Rejected")
+            bot.edit_message_text("❌ Rejected", call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        print(e)
+
+@bot.message_handler(commands=['start','price','active','signal','id','testsignal'])
+def handle_start(message):
+    global ADMIN_CHAT_ID
+    if message.chat.type=="private":
+        ADMIN_CHAT_ID=message.chat.id
+    g=get_gold()
+    rg=calc_rsi(prices_history) if len(prices_history)>2 else 50.0
+    txt=message.text
+    if txt.startswith('/id'):
+        bot.reply_to(message, "Your ID: "+str(message.from_user.id)); return
+    if txt.startswith('/testsignal'):
+        bot.reply_to(message, "🔍 Creating TEST GOLD signal... check DM!")
+        request_approval("GOLD", g, 28.5, "BUY"); return
+    if txt.startswith('/active'):
+        if len(active_signals)==0:
+            bot.reply_to(message, "📭 No active GOLD signals - Waiting for RSI <30 or >70\nBot analyzing every 60s... Gold is OPEN ✅")
+        else:
+            t="📊 ACTIVE GOLD ("+str(len(active_signals))+"):\n"
+            for s in active_signals:
+                t+=s["symbol"]+" "+s["action"]+" Entry $"+str(round(s["entry"],2))+"\n"
+            bot.reply_to(message,t)
+        return
+    if txt.startswith('/signal') or txt.startswith('/price'):
+        bot.reply_to(message, f"🔍 GOLD ANALYSIS 👑\n\n🥇 GOLD: ${round(g,2)} RSI: {round(rg,1)} OPEN ✅ 24/7\n\n⏳ Waiting for RSI <30 BUY or >70 SELL\nScanning every 60s AUTO...\nActive: {len(active_signals)}\n\nChannel: @KEVINTRAILBLAZE"); return
+    bot.reply_to(message, f"👑 KEVIN GOLD ONLY V4 ✅\n\n🥇 GOLD: ${g} OPEN ✅\nRSI: {round(rg,1)}\n\nGOLD ONLY - BTC REMOVED\n\nCommands:\n/signal - Analyze gold\n/active - Check active\n/testsignal - Test\n/price /id\n\nBot AUTO sends itself every 60s!")
+
+threading.Thread(target=signal_loop,daemon=True).start()
+
+if __name__=="__main__":
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        ext_url = os.getenv("RENDER_EXTERNAL_URL")
+        if ext_url:
+            bot.set_webhook(url=f"{ext_url}/{BOT_TOKEN}")
+            print(f"Webhook set {ext_url}", flush=True)
+    except Exception as e:
+        print(f"Webhook err {e}", flush=True)
+    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
