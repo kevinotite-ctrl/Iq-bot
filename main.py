@@ -3,7 +3,7 @@ from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-print("=== V26 AUTO PING ===", flush=True)
+print("=== V26 AUTO PING - REAL WEEKDAYS / OTC WEEKENDS ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
@@ -14,8 +14,12 @@ PRICE = "$10/month"
 
 OWNER_ID = None
 SCANNING = True
-LAST_SIGNAL_TIME = time.time() # tracks last real/manual signal
-PAIRS = ["EURUSD","GBPUSD","USDJPY","EURJPY","AUDUSD","EURGBP","USDCHF","GBPJPY","GPBJPY-OTC,"EURUSD-OTC","EURGPB-OTC","GPBUSD-OTC","USDCHF-OTC","AUDUSD-OTC"]
+LAST_SIGNAL_TIME = time.time()
+
+# === NEW: REAL vs OTC LISTS ===
+PAIRS_REAL = ["EURUSD","GBPUSD","USDJPY","EURJPY","AUDUSD","EURGBP","USDCHF","GBPJPY"]
+PAIRS_OTC = ["EURUSD-OTC","GBPUSD-OTC","USDJPY-OTC","EURJPY-OTC","AUDUSD-OTC","EURGBP-OTC","USDCHF-OTC","GBPJPY-OTC"]
+
 PAID_FILE = "paid_users.json"
 FREE_FILE = "free_users.json"
 HISTORY_FILE = "price_history.json"
@@ -50,12 +54,25 @@ def get_expiry(uid):
     if str(uid) not in PAID_USERS: return "Not paid"
     return datetime.datetime.fromtimestamp(PAID_USERS[str(uid)]).strftime('%d %b %Y')
 
+# === NEW: CHECK WEEKDAY vs WEEKEND IN WAT ===
+def get_active_pairs():
+    now_wat = datetime.datetime.now() + datetime.timedelta(hours=1) # WAT = UTC+1
+    day = now_wat.weekday() # 0=Mon ... 6=Sun
+    if day <= 4: # Mon-Fri = 0-4
+        return PAIRS_REAL, "REAL"
+    else: # Sat-Sun = 5,6
+        return PAIRS_OTC, "OTC"
+
 def get_price(pair):
-    try:
-        r = requests.get(f"https://api.exchangerate.host/convert?from={pair[:3]}&to={pair[3:6]}&amount=1", timeout=8).json()
-        if r.get("result"): return float(r["result"])
-    except: pass
-    base={"EURUSD":1.08,"GBPUSD":1.27,"USDJPY":150,"EURJPY":162,"AUDUSD":0.66,"EURGBP":0.85,"USDCHF":0.88,"GBPJPY":190}.get(pair,1.08)
+    # For OTC, don't call API, use synthetic
+    is_otc = "-OTC" in pair
+    clean_pair = pair.replace("-OTC","")
+    if not is_otc:
+        try:
+            r = requests.get(f"https://api.exchangerate.host/convert?from={clean_pair[:3]}&to={clean_pair[3:6]}&amount=1", timeout=8).json()
+            if r.get("result"): return float(r["result"])
+        except: pass
+    base={"EURUSD":1.08,"GBPUSD":1.27,"USDJPY":150,"EURJPY":162,"AUDUSD":0.66,"EURGBP":0.85,"USDCHF":0.88,"GBPJPY":190}.get(clean_pair,1.08)
     return base + random.uniform(-0.002,0.002)
 
 def calc_rsi(prices, period=14):
@@ -98,7 +115,8 @@ bot = telebot.TeleBot(TOKEN, threaded=False) if ':' in TOKEN else None
 def build_full_text(pair,d,c,rsi,ema,price,reason):
     now=datetime.datetime.now()+datetime.timedelta(hours=1)
     exp=now+datetime.timedelta(minutes=3)
-    return f"""🚨 KEVIN V26 SNIPER 🚨
+    market_type = "OTC" if "-OTC" in pair else "REAL"
+    return f"""🚨 KEVIN V26 SNIPER [{market_type}] 🚨
 
 💱 {pair}
 {'📈' if d=='CALL' else '📉'} {d} - 3 MIN {'🔺' if d=='CALL' else '🔻'}
@@ -117,7 +135,8 @@ if bot:
         global OWNER_ID
         if OWNER_ID is None: OWNER_ID=m.chat.id
         if OWNER_ID and m.chat.id==OWNER_ID:
-            bot.send_message(m.chat.id, f"👑 V26 OWNER\n/resume /pause /test /scan /status /paidlist\nAuto-ping every 2h if quiet")
+            active, mtype = get_active_pairs()
+            bot.send_message(m.chat.id, f"👑 V26 OWNER [{mtype} MODE]\nActive: {', '.join(active)}\n/resume /pause /test /scan /status /paidlist\nAuto: REAL Mon-Fri | OTC Sat-Sun | Switch Mon 00:00 WAT")
             return
         bot.send_message(m.chat.id, f"🚀 KEVIN SNIPER - 2 FREE then {PRICE}")
 
@@ -135,8 +154,9 @@ if bot:
             t="💰 Paid:\n" + "\n".join([f"{k} - {get_expiry(k)}" for k in PAID_USERS]) if PAID_USERS else "No paid"
             bot.send_message(m.chat.id,t)
         elif m.text.startswith("/status"):
+            active, mtype = get_active_pairs()
             mins = int((time.time()-LAST_SIGNAL_TIME)/60)
-            t=f"SCAN: {SCANNING}\nLast signal: {mins} mins ago\n" + "\n".join([f"{p}: {len(PRICE_HISTORY.get(p,[]))}" for p in PAIRS])
+            t=f"MODE: {mtype}\nSCAN: {SCANNING}\nLast signal: {mins} mins ago\nActive Pairs: {', '.join(active)}\n" + "\n".join([f"{p}: {len(PRICE_HISTORY.get(p,[]))}" for p in active])
             bot.send_message(m.chat.id,t)
         elif m.text.startswith("/resume"):
             SCANNING=True; bot.send_message(m.chat.id,"▶️ ON - auto ping active")
@@ -144,9 +164,10 @@ if bot:
             SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused - no auto ping")
         elif m.text.startswith("/test") or m.text.startswith("/scan"):
             is_scan = m.text.startswith("/scan")
-            pair = random.choice(PAIRS); d = random.choice(["CALL","PUT"]); c=85
+            active, mtype = get_active_pairs()
+            pair = random.choice(active); d = random.choice(["CALL","PUT"]); c=85
             rsi=72.5 if d=="CALL" else 28.3; ema="UP" if d=="CALL" else "DOWN"; price=round(random.uniform(1.05,1.35),5)
-            label = "⚡ QUICK SCAN - Bot ACTIVE!" if is_scan else "🔔 TEST SIGNAL"
+            label = f"⚡ QUICK SCAN - {mtype} MODE" if is_scan else f"🔔 TEST SIGNAL [{mtype}]"
             mk=InlineKeyboardMarkup(row_width=1)
             mk.add(
                 InlineKeyboardButton(f"👥 Users Only", callback_data=f"users_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
@@ -154,7 +175,7 @@ if bot:
                 InlineKeyboardButton(f"🚀 BOTH", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
                 InlineKeyboardButton("❌ Skip", callback_data="skip")
             )
-            txt=f"{label}\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi}\n\n👇 Where to send? (Normal scanning continues after)"
+            txt=f"{label}\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi}\n\n👇 Where to send?"
             bot.send_message(m.chat.id, txt, reply_markup=mk)
 
     @bot.callback_query_handler(func=lambda c: True)
@@ -180,9 +201,9 @@ if bot:
             if typ in ["chan","both"]:
                 try: bot.send_message(CHANNEL_ID, full); sent_chan=True
                 except: pass
-            LAST_SIGNAL_TIME = time.time() # reset timer
+            LAST_SIGNAL_TIME = time.time()
             where = "USERS" if typ=="users" else "CHANNEL" if typ=="chan" else "BOTH"
-            bot.edit_message_text(f"✅ SENT: {where} + Scanning continues normally\n👥 {sent_users} | 📢 {'Yes' if sent_chan else 'No'}\nLast signal timer reset", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(f"✅ SENT: {where} [{pair}]\n👥 {sent_users} | 📢 {'Yes' if sent_chan else 'No'}\nTimer reset", call.message.chat.id, call.message.message_id)
         except Exception as e:
             bot.send_message(call.message.chat.id, f"Error {e}")
 
@@ -192,7 +213,9 @@ if bot:
             js=request.get_data().decode('utf-8'); upd=telebot.types.Update.de_json(js); bot.process_new_updates([upd]); return ''
         return 'ok',200
     @app.route('/')
-    def home(): return "V26 AUTO PING LIVE",200
+    def home():
+        active, mtype = get_active_pairs()
+        return f"V26 LIVE - {mtype} MODE - {','.join(active)}",200
 
     def set_wh():
         time.sleep(5)
@@ -205,32 +228,42 @@ if bot:
 
 def scanner():
     global LAST_SIGNAL_TIME
+    current_market_type = None
     while True:
         try:
             time.sleep(60)
             if not OWNER_ID or not SCANNING or not bot: continue
 
+            # === CHECK FOR MARKET SWITCH ===
+            active_pairs, market_type = get_active_pairs()
+            if market_type != current_market_type:
+                print(f"=== MARKET SWITCH: {current_market_type} -> {market_type} ===", flush=True)
+                try:
+                    bot.send_message(OWNER_ID, f"🔄 AUTO SWITCH: Now trading {market_type} pairs\n{', '.join(active_pairs)}")
+                except: pass
+                current_market_type = market_type
+
             # AUTO PING if quiet 2 hours
-            if time.time() - LAST_SIGNAL_TIME > 7200: # 7200 = 2 hours
+            if time.time() - LAST_SIGNAL_TIME > 7200:
                 try:
                     now = datetime.datetime.now()+datetime.timedelta(hours=1)
-                    ping = f"""✅ BOT ACTIVE - Market Ranging
+                    ping = f"""✅ BOT ACTIVE [{market_type}] - Market Ranging
 
 ⏰ {now.strftime('%H:%M')} WAT
-📊 Scanning {len(PAIRS)} pairs 24/7
+📊 Scanning {len(active_pairs)} {market_type} pairs
 🔍 No high-confidence setup in last 2h
 💤 Waiting for RSI + EMA confluence
 
 Bot is live & working! Next signal soon...
 
-#Active #IQOption"""
+#Active #IQOption #{market_type}"""
                     bot.send_message(CHANNEL_ID, ping)
-                    bot.send_message(OWNER_ID, f"📢 Auto active ping sent to channel - no signal for 2h")
+                    bot.send_message(OWNER_ID, f"📢 Auto active ping sent [{market_type}] - no signal for 2h")
                     LAST_SIGNAL_TIME = time.time()
                 except Exception as e: print(f"ping err {e}")
 
-            # REAL SIGNAL SCAN
-            for pair in PAIRS:
+            # REAL SIGNAL SCAN - ONLY ACTIVE MARKET
+            for pair in active_pairs:
                 res=analyze_real(pair)
                 if not res: continue
                 d,c,rsi,ema,reason,price=res
@@ -241,7 +274,7 @@ Bot is live & working! Next signal soon...
                     InlineKeyboardButton(f"🚀 BOTH", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
                     InlineKeyboardButton("❌ Skip", callback_data="skip")
                 )
-                txt=f"🔔 REAL SIGNAL!\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi} EMA {ema}\n{reason}\n\n👇 Where to send? (Scanning continues after)"
+                txt=f"🔔 REAL SIGNAL! [{market_type}]\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi} EMA {ema}\n{reason}\n\n👇 Where to send?"
                 bot.send_message(OWNER_ID, txt, reply_markup=mk)
                 LAST_SIGNAL_TIME = time.time()
                 time.sleep(120)
