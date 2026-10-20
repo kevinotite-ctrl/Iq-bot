@@ -5,8 +5,9 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle  # <-- ADDED FOR CANDLESTICK
 
-print("=== V31 CHART SNIPER FINAL ===", flush=True)
+print("=== V31 CHART SNIPER FINAL - CANDLESTICK ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
@@ -142,18 +143,52 @@ def generate_chart(pair):
         ax2.set_facecolor('#131722')
         
         x = list(range(len(prices)))
+
+        # ===== CANDLESTICK CORRECTION =====
+        # Build fake OHLC from close history
+        open_list = [prices[0]] + prices[:-1]  # open = previous close
+        close_list = prices
+        high_list = []
+        low_list = []
+        for i in range(len(prices)):
+            o = open_list[i]
+            c = close_list[i]
+            # small wick based on volatility
+            wiggle = abs(c - o) * 0.3 + (c * 0.0004)
+            h = max(o,c) + wiggle
+            l = min(o,c) - wiggle
+            high_list.append(h)
+            low_list.append(l)
+
+        # Draw candles
+        for i in range(len(x)):
+            o = open_list[i]; h = high_list[i]; l = low_list[i]; c = close_list[i]
+            bullish = c >= o
+            color = '#26a69a' if bullish else '#ef5350'
+            # wick
+            ax1.plot([x[i], x[i]], [l, h], color=color, linewidth=0.8, alpha=0.9, zorder=2)
+            # body
+            body_h = abs(c - o)
+            if body_h < (h - l) * 0.08:  # make doji visible
+                body_h = (h - l) * 0.08
+            ax1.add_patch(Rectangle((x[i]-0.35, min(o,c)), 0.7, body_h, facecolor=color, edgecolor=color, linewidth=0.8, zorder=3))
+
         # Bollinger shaded
-        valid_u = [u for u in upper_list if u is not None]
-        valid_l = [l for l in lower_list if l is not None]
-        if valid_u and valid_l:
-            ax1.fill_between(x[-len(valid_u):], valid_l, valid_u, color='#5d9cf5', alpha=0.2, label='BB (20,2)')
-            ax1.plot(x[-len(valid_u):], valid_u, color='#5d9cf5', linewidth=0.8, alpha=0.6)
-            ax1.plot(x[-len(valid_u):], valid_l, color='#5d9cf5', linewidth=0.8, alpha=0.6)
-            if mid_list[-1]: ax1.plot(x, mid_list, color='gray', linewidth=0.5, linestyle='--', alpha=0.5)
-        
-        ax1.plot(x, prices, color='white', linewidth=1.2, label=f'{pair} Price')
-        ax1.plot(x, ema9_series, color='#FFD700', linewidth=1, label='EMA 9')
-        ax1.plot(x, ema21_series, color='orange', linewidth=1, label='EMA 21')
+        valid_idx = [i for i,u in enumerate(upper_list) if u is not None]
+        if valid_idx:
+            valid_u = [upper_list[i] for i in valid_idx]
+            valid_l = [lower_list[i] for i in valid_idx]
+            valid_x = [x[i] for i in valid_idx]
+            ax1.fill_between(valid_x, valid_l, valid_u, color='#5d9cf5', alpha=0.12, label='BB (20,2)')
+            ax1.plot(valid_x, valid_u, color='#5d9cf5', linewidth=0.8, alpha=0.5)
+            ax1.plot(valid_x, valid_l, color='#5d9cf5', linewidth=0.8, alpha=0.5)
+            mid_valid = [mid_list[i] for i in valid_idx if mid_list[i] is not None]
+            if mid_valid:
+                ax1.plot(valid_x[-len(mid_valid):], mid_valid, color='gray', linewidth=0.5, linestyle='--', alpha=0.5)
+
+        # EMAs on top of candles
+        ax1.plot(x, ema9_series, color='#FFD700', linewidth=1.2, label='EMA 9')
+        ax1.plot(x, ema21_series, color='orange', linewidth=1.2, label='EMA 21')
         
         if support: ax1.axhline(y=support, color='#26a69a', linestyle='--', linewidth=1.2, label=f'SUPPORT {round(support,5)}')
         if resistance: ax1.axhline(y=resistance, color='#ef5350', linestyle='--', linewidth=1.2, label=f'RESISTANCE {round(resistance,5)}')
@@ -161,15 +196,23 @@ def generate_chart(pair):
         # Signal arrow logic
         last_price = prices[-1]
         last_rsi = rsi_series[-1]
+        sr_gap = (resistance-support)*0.3 if support and resistance else last_price*0.002
+        
         if support and last_price <= (lower_list[-1] or 0)*1.002 and last_rsi < 35:
-            ax1.annotate(f'CALL 90% BUY\nSUPPORT', xy=(len(prices)-1, last_price), xytext=(len(prices)-10, last_price+ (resistance-support)*0.3 if support and resistance else last_price*0.002),
-                         arrowprops=dict(facecolor='#00FF00', shrink=0.05, width=2, headwidth=12), fontsize=14, color='#00FF00', weight='bold')
+            ax1.annotate(f'CALL 90% BUY\nSUPPORT', xy=(len(prices)-1, last_price), 
+                         xytext=(len(prices)-12, last_price+ sr_gap),
+                         arrowprops=dict(facecolor='#00FF00', edgecolor='#00FF00', shrink=0.05, width=2, headwidth=12), 
+                         fontsize=11, color='#00FF00', weight='bold',
+                         bbox=dict(boxstyle="round,pad=0.3", facecolor='#131722', edgecolor='#00FF00'))
         elif resistance and last_price >= (upper_list[-1] or 0)*0.998 and last_rsi > 65:
-            ax1.annotate(f'PUT 90% SELL\nRESISTANCE', xy=(len(prices)-1, last_price), xytext=(len(prices)-10, last_price- (resistance-support)*0.3 if support and resistance else last_price*0.002),
-                         arrowprops=dict(facecolor='#FF0000', shrink=0.05, width=2, headwidth=12), fontsize=14, color='#FF5252', weight='bold')
+            ax1.annotate(f'PUT 90% SELL\nRESISTANCE', xy=(len(prices)-1, last_price), 
+                         xytext=(len(prices)-12, last_price- sr_gap),
+                         arrowprops=dict(facecolor='#FF5252', edgecolor='#FF5252', shrink=0.05, width=2, headwidth=12), 
+                         fontsize=11, color='#FF5252', weight='bold',
+                         bbox=dict(boxstyle="round,pad=0.3", facecolor='#131722', edgecolor='#FF5252'))
         
         ax1.set_title(f'{pair} • V31 ICT+SR • Price: {round(last_price,5)} • RSI: {round(last_rsi,1)}', color='white', fontsize=12)
-        ax1.legend(facecolor='#131722', edgecolor='gray', labelcolor='white', fontsize=8)
+        ax1.legend(facecolor='#131722', edgecolor='gray', labelcolor='white', fontsize=7, loc='upper left')
         ax1.tick_params(colors='gray')
         ax1.grid(color='#2a2e39', linestyle='-', linewidth=0.3)
         
@@ -182,7 +225,6 @@ def generate_chart(pair):
         ax2.set_ylabel('RSI 14', color='white', fontsize=9)
         ax2.tick_params(colors='gray')
         ax2.grid(color='#2a2e39', linestyle='-', linewidth=0.3)
-        ax2.set_facecolor('#131722')
         
         plt.tight_layout()
         chart_path = f"/tmp/{pair}_chart.png"
@@ -191,6 +233,7 @@ def generate_chart(pair):
         return chart_path
     except Exception as e:
         print(f"Chart err {e}")
+        import traceback; traceback.print_exc()
         plt.close()
         return None
 
@@ -272,13 +315,13 @@ if bot:
             if len(prices) < 25:
                 bot.send_message(m.chat.id, f"⏳ Collecting data for {pair}... {len(prices)}/25 prices. Try in few mins.\nBot needs time to build chart.")
                 return
-            bot.send_message(m.chat.id, f"📈 Generating V31 chart for {pair}... Wait 3 sec")
+            bot.send_message(m.chat.id, f"📈 Generating V31 CANDLE chart for {pair}... Wait 3 sec")
             chart_path = generate_chart(pair)
             if chart_path and os.path.exists(chart_path):
                 support, resistance = find_sr_levels(prices, 40)
                 rsi = calc_rsi(prices)
                 with open(chart_path, 'rb') as f:
-                    cap = f"📊 {pair} LIVE CHART V31\nPrice: {round(prices[-1],5)}\nRSI: {round(rsi,1)}\nSupport: {round(support,5) if support else 'N/A'}\nResistance: {round(resistance,5) if resistance else 'N/A'}\n\nUse /levels for all pairs"
+                    cap = f"📊 {pair} LIVE CANDLE CHART V31\nPrice: {round(prices[-1],5)}\nRSI: {round(rsi,1)}\nSupport: {round(support,5) if support else 'N/A'}\nResistance: {round(resistance,5) if resistance else 'N/A'}\n\nUse /levels for all pairs"
                     bot.send_photo(m.chat.id, f, caption=cap)
             else:
                 bot.send_message(m.chat.id, "❌ Chart generation failed, try again")
@@ -393,7 +436,7 @@ if bot:
             js=request.get_data().decode('utf-8'); upd=telebot.types.Update.de_json(js); bot.process_new_updates([upd]); return ''
         return 'ok',200
     @app.route('/')
-    def home(): return "V31 CHART SNIPER LIVE",200
+    def home(): return "V31 CHART SNIPER LIVE - CANDLESTICK",200
 
     def set_wh():
         time.sleep(5)
@@ -412,7 +455,6 @@ def scanner():
             if not OWNER_ID or not SCANNING or not bot: continue
             if time.time() - LAST_SIGNAL_TIME > 7200:
                 try:
-                    now = datetime.datetime.now()+datetime.timedelta(hours=1)
                     ping = f"✅ V31 ACTIVE - Use /chart EURUSD for visuals\nScanning {len(PAIRS)} pairs"
                     bot.send_message(CHANNEL_ID, ping)
                     LAST_SIGNAL_TIME = time.time()
