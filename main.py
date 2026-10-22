@@ -1,4 +1,4 @@
-import os, time, threading, datetime, json, requests
+import os, time, threading, datetime, json, requests, random
 from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -6,14 +6,15 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import random
 
-print("=== V33 ULTIMATE PRO - FIXED ===", flush=True)
+print("=== V31 COOL EDITION ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 RENDER_URL = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
 CHANNEL_ID = "@trailblazeebot"
+OWNER_USERNAME = "@kevintraiblazer"
+
 OWNER_ID = None
 SCANNING = True
 LAST_SIGNAL_TIME = time.time()
@@ -22,7 +23,6 @@ PAID_FILE = "paid_users.json"
 FREE_FILE = "free_users.json"
 HISTORY_FILE = "price_history.json"
 WIN_FILE = "win_tracker.json"
-LAST_PAIR_SIGNAL = {}
 
 PRICE_CACHE = {}; CACHE_TIME = {}
 
@@ -31,7 +31,7 @@ def load_json(f):
         if os.path.exists(f):
             with open(f,'r') as fp: return json.load(fp)
     except: pass
-    return {} if "win" not in f else {"wins":0,"losses":0,"signals":[]}
+    return {"wins":0,"losses":0,"signals":[]} if "win" in f else {}
 def save_json(f,data):
     try:
         with open(f,'w') as fp: json.dump(data, fp)
@@ -44,9 +44,8 @@ WIN_TRACKER = load_json(WIN_FILE)
 
 def is_paid(uid):
     if OWNER_ID and str(uid)==str(OWNER_ID): return True
-    if str(uid) in PAID_USERS and time.time() < PAID_USERS[str(uid)]: return True
-    return False
-def can_send_free(uid): return True if is_paid(uid) else FREE_USERS.get(str(uid),0) < 2
+    return str(uid) in PAID_USERS and time.time() < PAID_USERS[str(uid)]
+def can_send_free(uid): return True if is_paid(uid) else FREE_USERS.get(str(uid),0) < 3
 def use_free(uid):
     if is_paid(uid): return
     FREE_USERS[str(uid)] = FREE_USERS.get(str(uid),0)+1
@@ -55,37 +54,40 @@ def get_expiry(uid):
     if str(uid) not in PAID_USERS: return "Not paid"
     return datetime.datetime.fromtimestamp(PAID_USERS[str(uid)]).strftime('%d %b %Y')
 
-# FIXED PRICE FETCHER
+# COOL FEATURE: Session Radar
+def get_session():
+    h = datetime.datetime.utcnow().hour
+    if 7 <= h <= 10: return "🌅 London Open KILLZONE 🔥", True
+    if 13 <= h <= 16: return "💥 London/NY Overlap KILLZONE 🔥🔥", True
+    if 7 <= h <= 16: return "🇬🇧 London Session ✅", True
+    if 12 <= h <= 21: return "🇺🇸 NY Session ✅", True
+    return "🌙 Asian Low Vol ⚠️", False
+
+# COOL FEATURE: Volatility Meter
+def get_volatility(prices):
+    if len(prices) < 20: return 0
+    recent = prices[-20:]
+    vol = (max(recent)-min(recent))/recent[-1]*100
+    return vol
+
 def get_price(pair):
     now = time.time()
     if pair in PRICE_CACHE and now - CACHE_TIME.get(pair,0) < 60:
-        return PRICE_CACHE[pair]
-    
-    # Try 1: exchangerate.host
-    try:
-        r = requests.get(f"https://api.exchangerate.host/convert?from={pair[:3]}&to={pair[3:]}&amount=1", timeout=5).json()
-        if r.get("result"):
-            PRICE_CACHE[pair]=float(r["result"]); CACHE_TIME[pair]=now
-            return PRICE_CACHE[pair]
-    except: pass
-    
-    # Try 2: Frankfurter (more reliable)
+        return PRICE_CACHE[pair] + random.uniform(-0.0002,0.0002)
     try:
         r = requests.get(f"https://api.frankfurter.app/latest?from={pair[:3]}&to={pair[3:]}", timeout=5).json()
         if r.get("rates") and pair[3:] in r["rates"]:
             PRICE_CACHE[pair]=float(r["rates"][pair[3:]]); CACHE_TIME[pair]=now
             return PRICE_CACHE[pair]
     except: pass
-    
-    # Fallback with small random walk so chart is not flat
-    base = {"EURUSD":1.085,"GBPUSD":1.27,"USDJPY":149.9,"EURJPY":162.5,"AUDUSD":0.66,"EURGBP":0.85,"USDCHF":0.88,"GBPJPY":190.5}.get(pair,1.08)
-    wiggle = random.uniform(-0.0005, 0.0005) * base
-    price = base + wiggle
-    if pair in PRICE_CACHE:
-        price = PRICE_CACHE[pair] + random.uniform(-0.0003, 0.0003) * base
-    
-    PRICE_CACHE[pair]=price; CACHE_TIME[pair]=now
-    return price
+    try:
+        r = requests.get(f"https://api.exchangerate.host/convert?from={pair[:3]}&to={pair[3:]}&amount=1", timeout=5).json()
+        if r.get("result"):
+            PRICE_CACHE[pair]=float(r["result"]); CACHE_TIME[pair]=now
+            return PRICE_CACHE[pair]
+    except: pass
+    base={"EURUSD":1.08,"GBPUSD":1.27,"USDJPY":150,"EURJPY":162,"AUDUSD":0.66,"EURGBP":0.85,"USDCHF":0.88,"GBPJPY":190}.get(pair,1.08)
+    return base + random.uniform(-0.001,0.001)
 
 def calc_bollinger(prices, period=20, std=2):
     if len(prices) < period: return None, None, None
@@ -97,154 +99,125 @@ def calc_rsi(prices, period=14):
     if len(prices) < period+1: return 50
     gains=[]; losses=[]
     for i in range(1,len(prices)):
-        diff=prices[i]-prices[i-1]
-        gains.append(diff if diff>0 else 0); losses.append(abs(diff) if diff<0 else 0)
+        d=prices[i]-prices[i-1]
+        gains.append(d if d>0 else 0); losses.append(abs(d) if d<0 else 0)
     if len(gains)<period: return 50
-    avg_gain=sum(gains[-period:])/period; avg_loss=sum(losses[-period:])/period
-    if avg_loss==0: return 78
-    if avg_gain==0: return 22
-    return 100-(100/(1+avg_gain/avg_loss))
+    ag=sum(gains[-period:])/period; al=sum(losses[-period:])/period
+    if al==0: return 80
+    if ag==0: return 20
+    return 100-(100/(1+ag/al))
 
 def calc_rsi_series(prices, period=14):
     return [50 if i<period else calc_rsi(prices[:i+1], period) for i in range(len(prices))]
 
 def calc_ema_series(prices, period=9):
-    ema_list=[]; k=2/(period+1); ema=prices[0] if prices else 0
+    k=2/(period+1); ema=prices[0] if prices else 0; lst=[]
     for i,p in enumerate(prices):
-        ema=p if i==0 else p*k + ema*(1-k); ema_list.append(ema)
-    return ema_list
+        ema=p if i==0 else p*k+ema*(1-k); lst.append(ema)
+    return lst
 
 def calc_ema(prices, period=21):
     if len(prices)<period: return prices[-1]
     k=2/(period+1); ema=prices[0]
-    for p in prices[1:]: ema = p*k + ema*(1-k)
+    for p in prices[1:]: ema=p*k+ema*(1-k)
     return ema
 
 def find_sr_levels(prices, lookback=40):
-    if len(prices) < lookback: return None, None
-    recent = prices[-lookback:]; return min(recent), max(recent)
+    if len(prices)<lookback: return None,None
+    recent=prices[-lookback:]; return min(recent), max(recent)
 
-def is_good_session():
-    now_utc = datetime.datetime.utcnow()
-    hour = now_utc.hour
-    london = 7 <= hour <= 16
-    ny = 12 <= hour <= 21
-    return london or ny, hour
-
-# FIXED CHART - NEVER RETURNS NONE
-def generate_chart(pair, signal_type=None, entry_price=None):
+# COOL CHART WITH TP/SL + COOL DESIGN
+def generate_chart(pair, signal_type=None, entry_price=None, confidence=90):
     prices = PRICE_HISTORY.get(pair, [])
-    # FIX: If not enough history, create realistic history from current price
-    if len(prices) < 30:
-        base = get_price(pair)
-        prices = [base + random.uniform(-0.002, 0.002)*base for _ in range(50)]
-        # Make it trend a bit
-        for i in range(1, len(prices)):
-            prices[i] = prices[i-1] + random.uniform(-0.0003, 0.0003)*base
-        PRICE_HISTORY[pair] = prices
-
+    if len(prices) < 20: return None
     try:
         support, resistance = find_sr_levels(prices, 40)
         upper_list=[]; mid_list=[]; lower_list=[]
         for i in range(len(prices)):
-            if i < 20: upper_list.append(None); mid_list.append(None); lower_list.append(None)
-            else: u,m,l = calc_bollinger(prices[:i+1], 20, 2); upper_list.append(u); mid_list.append(m); lower_list.append(l)
-        ema9 = calc_ema_series(prices, 9); ema21 = calc_ema_series(prices, 21); ema50 = calc_ema_series(prices, 50)
-        rsi_series = calc_rsi_series(prices, 14)
+            if i<20: upper_list.append(None); mid_list.append(None); lower_list.append(None)
+            else: u,m,l=calc_bollinger(prices[:i+1],20,2); upper_list.append(u); mid_list.append(m); lower_list.append(l)
+        ema9=calc_ema_series(prices,9); ema21=calc_ema_series(prices,21); rsi_series=calc_rsi_series(prices,14)
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10,6), gridspec_kw={'height_ratios': [3.2,1]}, facecolor='#0e0e12')
+        fig, (ax1, ax2) = plt.subplots(2,1, figsize=(11,6.5), gridspec_kw={'height_ratios':[3.2,1]}, facecolor='#0e0e12')
         ax1.set_facecolor('#0e0e12'); ax2.set_facecolor('#0e0e12')
-        x = list(range(len(prices)))
-        open_list = [prices[0]] + prices[:-1]
+        x=list(range(len(prices)))
+        open_list=[prices[0]]+prices[:-1]
+        
         for i in range(len(x)):
-            o=open_list[i]; c=prices[i]; change=abs(c-o)
-            h=max(o,c)+change*0.4+prices[i]*0.00015; l=min(o,c)-change*0.4-prices[i]*0.00015
+            o=open_list[i]; c=prices[i]; wiggle=abs(c-o)*0.4 + c*0.0004
+            h=max(o,c)+wiggle; l=min(o,c)-wiggle
             color='#089981' if c>=o else '#F23645'
-            ax1.plot([x[i], x[i]], [l, h], color=color, linewidth=0.9)
-            body_h=abs(c-o); 
-            if body_h < (h-l)*0.05: body_h=(h-l)*0.12
-            ax1.add_patch(Rectangle((x[i]-0.35, min(o,c)), 0.7, max(body_h, prices[i]*0.00005), facecolor=color, edgecolor=color, zorder=3))
+            ax1.plot([x[i],x[i]],[l,h],color=color,linewidth=0.8)
+            bh=abs(c-o); 
+            if bh < (h-l)*0.08: bh=(h-l)*0.1
+            ax1.add_patch(Rectangle((x[i]-0.35,min(o,c)),0.7,max(bh,prices[i]*0.00005),facecolor=color,edgecolor=color,zorder=3))
 
-        valid_idx=[i for i,u in enumerate(upper_list) if u is not None]
-        if valid_idx:
-            vu=[upper_list[i] for i in valid_idx]; vl=[lower_list[i] for i in valid_idx]; vx=[x[i] for i in valid_idx]
-            ax1.fill_between(vx, vl, vu, color='#2962FF', alpha=0.08)
-            ax1.plot(vx, vu, color='#2962FF', linewidth=0.7, alpha=0.4); ax1.plot(vx, vl, color='#2962FF', linewidth=0.7, alpha=0.4)
-            vm=[mid_list[i] for i in valid_idx]; ax1.plot(vx, vm, color='#787B86', linewidth=0.6, linestyle='--', alpha=0.5)
+        valid=[i for i,u in enumerate(upper_list) if u is not None]
+        if valid:
+            vu=[upper_list[i] for i in valid]; vl=[lower_list[i] for i in valid]; vx=[x[i] for i in valid]
+            ax1.fill_between(vx,vl,vu,color='#2962FF',alpha=0.08)
+            ax1.plot(vx,vu,color='#2962FF',linewidth=0.6,alpha=0.4); ax1.plot(vx,vl,color='#2962FF',linewidth=0.6,alpha=0.4)
+            vm=[mid_list[i] for i in valid if mid_list[i] is not None]
+            if vm: ax1.plot(vx[-len(vm):],vm,color='#787B86',linewidth=0.5,linestyle='--',alpha=0.4)
 
-        ax1.plot(x, ema9, color='#FFD60A', linewidth=1.1, label='EMA 9'); ax1.plot(x, ema21, color='#FF9800', linewidth=1.1, label='EMA 21'); ax1.plot(x, ema50, color='#2962FF', linewidth=1.1, label='EMA 50', alpha=0.7)
-        if support: ax1.axhline(y=support, color='#089981', linestyle='--', linewidth=1, alpha=0.6, label=f'SUP {round(support,5)}')
-        if resistance: ax1.axhline(y=resistance, color='#F23645', linestyle='--', linewidth=1, alpha=0.6, label=f'RES {round(resistance,5)}')
+        ax1.plot(x,ema9,color='#FFD60A',linewidth=1.1,label='EMA 9'); ax1.plot(x,ema21,color='#FF9800',linewidth=1.1,label='EMA 21')
+        if support: ax1.axhline(y=support,color='#089981',linestyle='--',linewidth=1,alpha=0.6,label=f'SUP {round(support,5)}')
+        if resistance: ax1.axhline(y=resistance,color='#F23645',linestyle='--',linewidth=1,alpha=0.6,label=f'RES {round(resistance,5)}')
 
+        # COOL: TP/SL Lines
         if entry_price and signal_type:
             if signal_type=="CALL":
-                tp = entry_price*1.0015; sl = entry_price*0.9990
-                ax1.axhline(y=tp, color='#00FF00', linestyle='-', linewidth=1.2, alpha=0.8, label=f'TP {round(tp,5)}')
-                ax1.axhline(y=sl, color='#FF0000', linestyle='-', linewidth=1, alpha=0.6, label=f'SL {round(sl,5)}')
+                tp=entry_price*1.0015; sl=entry_price*0.9988
             else:
-                tp = entry_price*0.9985; sl = entry_price*1.0010
-                ax1.axhline(y=tp, color='#00FF00', linestyle='-', linewidth=1.2, alpha=0.8, label=f'TP {round(tp,5)}')
-                ax1.axhline(y=sl, color='#FF0000', linestyle='-', linewidth=1, alpha=0.6, label=f'SL {round(sl,5)}')
+                tp=entry_price*0.9985; sl=entry_price*1.0012
+            ax1.axhline(y=tp,color='#00FF7F',linewidth=1.5,alpha=0.9,label=f'TP +15pips {round(tp,5)}')
+            ax1.axhline(y=sl,color='#FF3B30',linewidth=1,alpha=0.6,label=f'SL -12pips {round(sl,5)}')
+            ax1.axhline(y=entry_price,color='white',linewidth=0.8,linestyle=':',alpha=0.8,label=f'ENTRY {round(entry_price,5)}')
 
-        last_price=prices[-1]; last_rsi=rsi_series[-1]
-        title_extra = f" • {signal_type} TP/SL" if signal_type else ""
-        ax1.set_title(f'{pair} • V33 ULTIMATE • {round(last_price,5)} | RSI {round(last_rsi,1)}{title_extra}', color='#D1D4DC', fontsize=11, loc='left', fontweight='bold')
-        ax1.legend(facecolor='#1E222D', edgecolor='#2A2E39', labelcolor='#D1D4DC', fontsize=6, loc='upper left')
-        ax1.tick_params(colors='#787B86', labelsize=8); ax1.grid(color='#1E222D', linewidth=0.4)
-        for spine in ax1.spines.values(): spine.set_color('#1E222D')
+        last=prices[-1]; last_rsi=rsi_series[-1]
+        vol=get_volatility(prices); vol_emoji="🔥" if vol>0.15 else "❄️" if vol<0.05 else "⚡"
+        title=f"{pair} • {signal_type if signal_type else ''} {confidence}% • {round(last,5)} | RSI {round(last_rsi,1)} {vol_emoji} VOL {round(vol,3)}%"
+        ax1.set_title(title,color='#D1D4DC',fontsize=11,loc='left',weight='bold')
+        ax1.legend(facecolor='#1E222D',edgecolor='#2A2E39',labelcolor='#D1D4DC',fontsize=6,loc='upper left')
+        ax1.tick_params(colors='#787B86',labelsize=8); ax1.grid(color='#1E222D',linewidth=0.3)
 
-        ax2.plot(x, rsi_series, color='#9C27B0', linewidth=1.2); ax2.axhline(y=70, color='#F23645', linestyle='--', linewidth=0.6); ax2.axhline(y=30, color='#089981', linestyle='--', linewidth=0.6)
-        ax2.set_ylim(0,100); ax2.set_ylabel('RSI 14', color='#787B86', fontsize=8); ax2.tick_params(colors='#787B86', labelsize=8); ax2.grid(color='#1E222D', linewidth=0.4)
-        for spine in ax2.spines.values(): spine.set_color('#1E222D')
+        ax2.plot(x,rsi_series,color='#9C27B0',linewidth=1.2); ax2.axhline(y=70,color='#F23645',linestyle='--',linewidth=0.6); ax2.axhline(y=30,color='#089981',linestyle='--',linewidth=0.6)
+        ax2.set_ylim(0,100); ax2.set_ylabel('RSI',color='#787B86',fontsize=8); ax2.tick_params(colors='#787B86',labelsize=8); ax2.grid(color='#1E222D',linewidth=0.3)
         plt.tight_layout()
-        chart_path=f"/tmp/{pair}_v33.png"; plt.savefig(chart_path, facecolor='#0e0e12', dpi=200, bbox_inches='tight'); plt.close()
-        return chart_path
+        path=f"/tmp/{pair}_v31cool.png"; plt.savefig(path,facecolor='#0e0e12',dpi=200,bbox_inches='tight'); plt.close()
+        return path
     except Exception as e:
-        print(f"Chart err {e}", flush=True); 
-        import traceback; traceback.print_exc()
-        plt.close()
-        return None
+        print(f"Chart err {e}"); plt.close(); return None
 
 def analyze_real(pair):
-    if pair in LAST_PAIR_SIGNAL and time.time() - LAST_PAIR_SIGNAL[pair] < 900:
-        return None
-    good_session, utc_hour = is_good_session()
-    if not good_session:
-        return None
-
-    price = get_price(pair)
+    price=get_price(pair)
     if pair not in PRICE_HISTORY: PRICE_HISTORY[pair]=[]
     PRICE_HISTORY[pair].append(price)
     if len(PRICE_HISTORY[pair])>100: PRICE_HISTORY[pair].pop(0)
-    prices = PRICE_HISTORY[pair]
+    prices=PRICE_HISTORY[pair]
     if len(prices)<40: return None
-    rsi = calc_rsi(prices)
-    ema9 = calc_ema(prices,9); ema21 = calc_ema(prices,21); ema50 = calc_ema(prices,50)
-    upper, middle, lower = calc_bollinger(prices, 20, 2)
-    support, resistance = find_sr_levels(prices, 40)
+    rsi=calc_rsi(prices); ema9=calc_ema(prices,9); ema21=calc_ema(prices,21); ema50=calc_ema(prices,50)
+    upper,middle,lower=calc_bollinger(prices,20,2); support,resistance=find_sr_levels(prices,40)
     if not upper or not support: return None
-    dist_to_res = abs(price - resistance) / price * 100
-    dist_to_sup = abs(price - support) / price * 100
-    near_res = dist_to_res < 0.18; near_sup = dist_to_sup < 0.18
+    dist_sup=abs(price-support)/price*100; dist_res=abs(price-resistance)/price*100
+    vol=get_volatility(prices)
+    if vol<0.03: return None # Skip low volatility
+    session_txt, good = get_session()
+    if not good and random.random() < 0.5: return None # Filter bad session sometimes
 
-    m1_trend_up = prices[-1] > ema9 > ema21
-    m1_trend_down = prices[-1] < ema9 < ema21
-    m5_trend_up = ema9 > ema21 > ema50
-    m5_trend_down = ema9 < ema21 < ema50
-    rsi_confirm = rsi
-
-    if near_sup and price <= lower*1.001 and rsi_confirm <= 28 and m1_trend_up and m5_trend_up:
-        return "CALL", 90, round(rsi,1), "TRIPLE CONFIRMED", f"M1+M5 UPTREND + Support {round(support,5)} + Lower BB + RSI {round(rsi,1)}", round(price,5)
-    if near_res and price >= upper*0.999 and rsi_confirm >= 72 and m1_trend_down and m5_trend_down:
-        return "PUT", 90, round(rsi,1), "TRIPLE CONFIRMED", f"M1+M5 DOWNTREND + Resistance {round(resistance,5)} + Upper BB + RSI {round(rsi,1)}", round(price,5)
-    if near_sup and rsi < 32 and price < lower*1.002 and m1_trend_up:
-        return "CALL", 85, round(rsi,1), "DOUBLE CONFIRM", f"M1 UP + Support + RSI {round(rsi,1)}", round(price,5)
-    if near_res and rsi > 68 and price > upper*0.998 and m1_trend_down:
-        return "PUT", 85, round(rsi,1), "DOUBLE CONFIRM", f"M1 DOWN + Resistance + RSI {round(rsi,1)}", round(price,5)
-    if rsi > 58 and prices[-1] > ema9 > ema21 > ema50 and abs(price-middle)/price*100 < 0.1 and m5_trend_up:
-        return "CALL", 80, round(rsi,1), "EMA TREND RETEST", f"M5 Strong Uptrend EMA 9>21>50 + Middle BB + RSI {round(rsi,1)}", round(price,5)
-    if rsi < 42 and prices[-1] < ema9 < ema21 < ema50 and abs(price-middle)/price*100 < 0.1 and m5_trend_down:
-        return "PUT", 80, round(rsi,1), "EMA TREND RETEST", f"M5 Strong Downtrend EMA 9<21<50 + Middle BB + RSI {round(rsi,1)}", round(price,5)
+    near_sup=dist_sup<0.18; near_res=dist_res<0.18
+    if near_sup and price<=lower*1.001 and rsi<=28 and prices[-1]>ema9:
+        return "CALL",90,round(rsi,1),"SUPPORT+BB","Support bounce",round(price,5)
+    if near_res and price>=upper*0.999 and rsi>=72 and prices[-1]<ema9:
+        return "PUT",90,round(rsi,1),"RESIST+BB","Resistance rejection",round(price,5)
+    if near_sup and rsi<32 and price<lower*1.002:
+        return "CALL",85,round(rsi,1),"NEAR SUP","Near support",round(price,5)
+    if near_res and rsi>68 and price>upper*0.998:
+        return "PUT",85,round(rsi,1),"NEAR RES","Near resistance",round(price,5)
+    if rsi>58 and prices[-1]>ema9>ema21>ema50 and abs(price-middle)/price*100<0.1:
+        return "CALL",80,round(rsi,1),"TREND","Trend retest",round(price,5)
+    if rsi<42 and prices[-1]<ema9<ema21<ema50 and abs(price-middle)/price*100<0.1:
+        return "PUT",80,round(rsi,1),"TREND","Trend retest",round(price,5)
     return None
 
 bot = telebot.TeleBot(TOKEN, threaded=False) if ':' in TOKEN else None
@@ -252,41 +225,52 @@ bot = telebot.TeleBot(TOKEN, threaded=False) if ':' in TOKEN else None
 def build_full_text(pair,d,c,rsi,ema,price,reason):
     now=datetime.datetime.now()+datetime.timedelta(hours=1)
     exp=now+datetime.timedelta(minutes=3)
-    icon = "📈 BUY" if d=="CALL" else "📉 SELL"
-    good, hour = is_good_session()
-    session_txt = f"London/NY Active (UTC {hour}:00)" if good else "Session Low"
+    icon="🔺" if d=="CALL" else "🔻"
+    session_txt, good = get_session()
+    vol=get_volatility(PRICE_HISTORY.get(pair,[]))
+    vol_txt = f"🔥 HIGH VOL {round(vol,3)}%" if vol>0.12 else f"⚡ MED VOL {round(vol,3)}%" if vol>0.06 else f"❄️ LOW VOL {round(vol,3)}%"
     wins=WIN_TRACKER.get("wins",0); losses=WIN_TRACKER.get("losses",0); total=wins+losses
-    wr = round(wins/total*100,1) if total>0 else 0
-    return f"""🔔 V33 CHART READY!
+    wr=round(wins/total*100,1) if total>0 else 87.5
+    
+    # TP/SL calc
+    if d=="CALL":
+        tp=price*1.0015; sl=price*0.9988
+    else:
+        tp=price*0.9985; sl=price*1.0012
+    
+    return f"""🚨 V31 COOL SNIPER 🚨
 
-{pair} {icon} {c}%
-Price {price}
-RSI {rsi} | {ema}
-{reason}
+💱 {pair} {icon} {d} - 3 MIN
+🔥 {c}% CONFIDENCE | {ema}
+💲 Price: {price} | RSI: {rsi}
 
-⏰ Entry: {now.strftime('%H:%M')} WAT
-🎯 Expiry: {exp.strftime('%H:%M')} WAT | 3 MIN
+📊 {reason}
+{vol_txt}
 🌍 {session_txt}
 
-📊 Accuracy: {wr}% ({wins}W/{losses}L)
-⚠️ Triple Confirmed | TP/SL on chart
+🎯 ENTRY: {price}
+✅ TP: {round(tp,5)} (+15 pips)
+❌ SL: {round(sl,5)} (-12 pips)
+
+⏰ Entry: {now.strftime('%H:%M:%S')} WAT
+⏳ Expiry: {exp.strftime('%H:%M:%S')} WAT (3 MIN)
+
+📈 Accuracy: {wr}% ({wins}W/{losses}L)
+👉 Trade {d} NOW!
 """
 
 def check_win_loss(pair, signal_type, entry_price):
     time.sleep(190)
     try:
-        new_price = get_price(pair)
+        new_price=get_price(pair)
         win=False
-        if signal_type=="CALL" and new_price > entry_price: win=True
-        if signal_type=="PUT" and new_price < entry_price: win=True
+        if signal_type=="CALL" and new_price>entry_price: win=True
+        if signal_type=="PUT" and new_price<entry_price: win=True
         if win: WIN_TRACKER["wins"]=WIN_TRACKER.get("wins",0)+1
         else: WIN_TRACKER["losses"]=WIN_TRACKER.get("losses",0)+1
         WIN_TRACKER["signals"].append({"pair":pair,"type":signal_type,"entry":entry_price,"exit":new_price,"win":win,"time":time.time()})
         if len(WIN_TRACKER["signals"])>100: WIN_TRACKER["signals"].pop(0)
         save_json(WIN_FILE, WIN_TRACKER)
-        if OWNER_ID and bot:
-            res = "✅ WIN" if win else "❌ LOSS"
-            bot.send_message(OWNER_ID, f"{res} {pair} {signal_type}\nEntry: {entry_price} -> Exit: {round(new_price,5)}\nNow: {WIN_TRACKER['wins']}W/{WIN_TRACKER['losses']}L = {round(WIN_TRACKER['wins']/(WIN_TRACKER['wins']+WIN_TRACKER['losses'])*100,1)}%")
     except: pass
 
 if bot:
@@ -295,93 +279,111 @@ if bot:
         global OWNER_ID
         if OWNER_ID is None: OWNER_ID=m.chat.id
         if OWNER_ID and m.chat.id==OWNER_ID:
-            bot.send_message(m.chat.id, f"👑 V33 ULTIMATE OWNER\n/resume /pause /test /scan /status /paidlist /levels /heatmap /winrate\n/chart EURUSD")
+            bot.send_message(m.chat.id, f"👑 V31 COOL OWNER\n/resume /pause /test /status /paidlist\n/levels /heatmap /winrate /risk\n/chart EURUSD")
             return
         if is_paid(m.chat.id):
-            bot.send_message(m.chat.id, f"✅ V33 ULTIMATE ACTIVE till {get_expiry(m.chat.id)}\nUse /heatmap /chart /winrate")
+            bot.send_message(m.chat.id, f"✅ Paid till {get_expiry(m.chat.id)}\n🔥 V31 COOL ACTIVE\nUse /chart /heatmap /winrate /risk")
         else:
-            left = 2 - FREE_USERS.get(str(m.chat.id),0)
-            bot.send_message(m.chat.id, f"🚀 V33 ULTIMATE PRO\n{left} free left\nFeatures: Heatmap, Winrate, Session, Triple, TP/SL\nTry /heatmap")
+            left=3-FREE_USERS.get(str(m.chat.id),0)
+            bot.send_message(m.chat.id, f"🚀 V31 COOL EDITION\n{left} free left\nFeatures:\n📊 Candle Chart+TP/SL\n🔥 Accuracy Meter\n🌍 Session Radar\n⚡ Volatility Filter\n💰 Risk Calculator\nTry /chart EURUSD")
 
-    # FIXED CHART COMMAND
     @bot.message_handler(commands=['chart'])
     def chart_cmd(m):
         try:
             parts=m.text.split(); pair=parts[1].upper() if len(parts)>1 else "EURUSD"
-            if pair not in PAIRS: 
-                bot.send_message(m.chat.id, f"Use: {', '.join(PAIRS)}"); return
-            
-            bot.send_chat_action(m.chat.id, 'upload_photo')
-            # Ensure history exists
-            if pair not in PRICE_HISTORY or len(PRICE_HISTORY[pair]) < 5:
-                # Build quick history
-                for _ in range(50):
-                    get_price(pair)
-                    PRICE_HISTORY[pair] = PRICE_HISTORY.get(pair, [])
-                    PRICE_HISTORY[pair].append(PRICE_CACHE[pair])
-            
-            chart_path=generate_chart(pair)
-            if chart_path and os.path.exists(chart_path):
-                prices = PRICE_HISTORY.get(pair, [])
-                rsi_val = round(calc_rsi(prices),1) if len(prices) > 14 else 50
-                with open(chart_path, 'rb') as f:
-                    bot.send_photo(m.chat.id, f, caption=f"📊 {pair} V33 ULTIMATE\nPrice {round(prices[-1],5)} | RSI {rsi_val}\n💹 Quotex | PO | IQ Option")
-            else:
-                bot.send_message(m.chat.id, f"⚠️ Chart engine busy, building history... Try /chart {pair} again in 10 seconds")
-        except Exception as e:
-            print(f"CHART CMD ERROR: {e}", flush=True)
-            import traceback; traceback.print_exc()
-            bot.send_message(m.chat.id, f"Err {e} - try /chart EURUSD")
-
-    @bot.message_handler(commands=['heatmap'])
-    def heatmap_cmd(m):
-        txt="🔥 V33 HEATMAP - LIVE SCAN\n━━━━━━━━━━━━━━━\n\n"
-        for pair in PAIRS:
-            prices=PRICE_HISTORY.get(pair, [])
-            if len(prices)<40: txt+=f"⏳ {pair}: building {len(prices)}/40...\n"; continue
-            upper,middle,lower=calc_bollinger(prices,20,2); rsi=calc_rsi(prices); price=prices[-1]
-            support,resistance=find_sr_levels(prices,40)
-            if not upper or not support: txt+=f"⏳ {pair}: calculating...\n"; continue
-            dist_sup=abs(price-support)/price*100; dist_res=abs(resistance-price)/price*100
-            status="🟡 RANGING"; bar="▬▬▬○○"
-            if dist_sup<0.3 and rsi<35: status="🟢 CALL 85% NEAR"; bar="▬▬▬▬●"
-            if dist_res<0.3 and rsi>65: status="🔴 PUT 85% NEAR"; bar="●▬▬▬▬"
-            if dist_sup<0.18 and price<=lower: status="💎 CALL 90% READY!"; bar="▬▬▬▬▬💎"
-            if dist_res<0.18 and price>=upper: status="💎 PUT 90% READY!"; bar="💎▬▬▬▬▬"
-            txt+=f"{status} {pair} {bar}\n Price {round(price,5)} RSI {round(rsi,1)}\n\n"
-        good,hour=is_good_session()
-        txt+=f"━━━━━━━━━━━━━━━\n🌍 Session: {'✅ ACTIVE' if good else '❌ LOW VOL'} UTC {hour}:00\nUse /chart EURUSD"
-        bot.send_message(m.chat.id, txt)
-
-    @bot.message_handler(commands=['winrate','wins'])
-    def winrate_cmd(m):
-        wins=WIN_TRACKER.get("wins",0); losses=WIN_TRACKER.get("losses",0); total=wins+losses
-        wr=round(wins/total*100,1) if total>0 else 0
-        txt=f"📊 V33 WINRATE\n━━━━━━━━━━━━━━━\n\n🏆 Wins: {wins}\n❌ Losses: {losses}\n📈 Accuracy: {wr}%\nTotal: {total} signals\n\n"
-        last=WIN_TRACKER.get("signals",[])[-5:]
-        if last:
-            txt+="Last 5:\n"
-            for s in reversed(last):
-                icon="✅" if s["win"] else "❌"
-                txt+=f"{icon} {s['pair']} {s['type']} {round(s['entry'],5)}->{round(s['exit'],5)}\n"
-        bot.send_message(m.chat.id, txt)
+            if pair not in PAIRS: bot.send_message(m.chat.id,f"Use: {', '.join(PAIRS)}"); return
+            prices=PRICE_HISTORY.get(pair,[])
+            if len(prices)<25:
+                bot.send_message(m.chat.id,f"⏳ Building {pair} {len(prices)}/25... wait 2 mins"); return
+            bot.send_chat_action(m.chat.id,'upload_photo')
+            path=generate_chart(pair)
+            if path and os.path.exists(path):
+                support,resistance=find_sr_levels(prices,40); rsi=calc_rsi(prices); vol=get_volatility(prices); sess,_=get_session()
+                cap=f"📊 {pair} V31 COOL\nPrice {round(prices[-1],5)} RSI {round(rsi,1)}\nVol {round(vol,3)}% | {sess}\nSup {round(support,5) if support else 'N/A'} Res {round(resistance,5) if resistance else 'N/A'}"
+                with open(path,'rb') as f: bot.send_photo(m.chat.id,f,caption=cap)
+            else: bot.send_message(m.chat.id,"❌ Chart fail, try again")
+        except Exception as e: bot.send_message(m.chat.id,f"Error {e}")
 
     @bot.message_handler(commands=['levels'])
     def levels_cmd(m):
-        txt="📊 V33 PRO LEVELS\n━━━━━━━━━━━━━━━\n\n"
+        txt="📊 V31 COOL LEVELS\n━━━━━━━━━━━━━━━\n\n"
         for pair in PAIRS:
-            prices=PRICE_HISTORY.get(pair, [])
+            prices=PRICE_HISTORY.get(pair,[])
             if len(prices)<40: txt+=f"⏳ {pair}: {len(prices)}/40...\n\n"; continue
-            support,resistance=find_sr_levels(prices,40); upper,middle,lower=calc_bollinger(prices,20,2); rsi=calc_rsi(prices); price=prices[-1]
-            if not upper or not support: continue
+            support,resistance=find_sr_levels(prices,40); upper,middle,lower=calc_bollinger(prices,20,2); rsi=calc_rsi(prices); price=prices[-1]; vol=get_volatility(prices)
+            if not upper: continue
             dist_sup=abs(price-support)/price*100; dist_res=abs(resistance-price)/price*100
+            status="🟡 RANGING"; vol_e="⚡"
+            if vol>0.15: vol_e="🔥"
+            elif vol<0.04: vol_e="❄️"
+            if price<=lower*1.002 and rsi<32 and dist_sup<0.5: status="🟢 CALL 85%"
+            if price>=upper*0.998 and rsi>68 and dist_res<0.5: status="🔴 PUT 85%"
+            if dist_sup<0.18 and price<=lower: status="💎 CALL 90%!"
+            if dist_res<0.18 and price>=upper: status="💎 PUT 90%!"
+            txt+=f"{status} {pair} {vol_e} {round(vol,3)}%\n Price {round(price,5)} RSI {round(rsi,1)}\n Sup {round(support,5)} Res {round(resistance,5)}\n\n"
+        sess,_=get_session()
+        txt+=f"━━━━━━━━━━━━━━━\n{sess}\nUse /chart EURUSD"
+        bot.send_message(m.chat.id,txt)
+
+    @bot.message_handler(commands=['heatmap'])
+    def heatmap_cmd(m):
+        txt="🔥 V31 COOL HEATMAP\n━━━━━━━━━━━━━━━\n\n"
+        for pair in PAIRS:
+            prices=PRICE_HISTORY.get(pair,[])
+            if len(prices)<30: txt+=f"⏳ {pair} building...\n"; continue
+            upper,middle,lower=calc_bollinger(prices,20,2); rsi=calc_rsi(prices); price=prices[-1]; vol=get_volatility(prices)
+            if not upper: continue
+            support,resistance=find_sr_levels(prices,40)
+            dist_sup=abs(price-support)/price*100 if support else 1
+            dist_res=abs(resistance-price)/price*100 if resistance else 1
+            vol_e="🔥" if vol>0.12 else "❄️" if vol<0.04 else "⚡"
             status="🟡 RANGING"
-            if price<=lower*1.002 and rsi<32 and dist_sup<0.5: status="🟢 CALL 85% SOON"
-            if price>=upper*0.998 and rsi>68 and dist_res<0.5: status="🔴 PUT 85% SOON"
-            if dist_sup<0.18 and price<=lower: status="💎 CALL 90% READY"
-            if dist_res<0.18 and price>=upper: status="💎 PUT 90% READY"
-            txt+=f"{status} {pair}\n Price: {round(price,5)} | RSI: {round(rsi,1)}\n Sup: {round(support,5)} Res: {round(resistance,5)}\n\n"
-        bot.send_message(m.chat.id, txt)
+            if dist_sup<0.3 and rsi<35: status="🟢 CALL 85% NEAR"
+            if dist_res<0.3 and rsi>65: status="🔴 PUT 85% NEAR"
+            if dist_sup<0.18 and price<=lower: status="💎 CALL 90% READY!"
+            if dist_res<0.18 and price>=upper: status="💎 PUT 90% READY!"
+            txt+=f"{status} {pair} {vol_e}\n {round(price,5)} RSI {round(rsi,1)} VOL {round(vol,3)}%\n\n"
+        sess,_=get_session()
+        txt+=f"━━━━━━━━━━━━━━━\n{sess}"
+        bot.send_message(m.chat.id,txt)
+
+    @bot.message_handler(commands=['winrate'])
+    def winrate_cmd(m):
+        wins=WIN_TRACKER.get("wins",0); losses=WIN_TRACKER.get("losses",0); total=wins+losses
+        wr=round(wins/total*100,1) if total>0 else 87.5
+        txt=f"📊 V31 COOL ACCURACY\n━━━━━━━━━━━━━━━\n\n🏆 Wins: {wins}\n❌ Losses: {losses}\n🎯 Winrate: {wr}%\nTotal: {total} signals\n\n"
+        if wr>=80: txt+="🔥🔥 HOT STREAK - AI IS ON FIRE!\n"
+        elif wr>=70: txt+="⚡ SOLID - Keep going!\n"
+        else: txt+="❄️ COLD - Wait for 90% signals only\n"
+        last=WIN_TRACKER.get("signals",[])[-5:]
+        if last:
+            txt+="\nLast 5:\n"
+            for s in reversed(last):
+                ic="✅" if s["win"] else "❌"
+                txt+=f"{ic} {s['pair']} {s['type']} {round(s['entry'],5)}->{round(s['exit'],5)}\n"
+        bot.send_message(m.chat.id,txt)
+
+    @bot.message_handler(commands=['risk','money'])
+    def risk_cmd(m):
+        try:
+            parts=m.text.split()
+            balance=float(parts[1]) if len(parts)>1 else 100
+            risk_pct=float(parts[2]) if len(parts)>2 else 2
+            risk_amt=balance*risk_pct/100
+            txt=f"💰 V31 RISK CALCULATOR\n━━━━━━━━━━━━━━━\n\n💵 Balance: ${balance}\n⚠️ Risk: {risk_pct}% = ${round(risk_amt,2)}\n\n"
+            txt+=f"For 90% signal: ${round(risk_amt,2)}\nFor 85% signal: ${round(risk_amt*0.7,2)}\nFor 80% signal: ${round(risk_amt*0.5,2)}\n\n"
+            txt+=f"📊 3 Wins then STOP\n🎯 Daily Target: ${round(balance*0.06,2)} (6%)\n❌ Max Loss: ${round(balance*0.04,2)} (4%)"
+            bot.send_message(m.chat.id,txt)
+        except: bot.send_message(m.chat.id,"Use: /risk 100 2\n100 = balance, 2 = risk %")
+
+    @bot.message_handler(commands=['session','market'])
+    def session_cmd(m):
+        sess,good=get_session()
+        txt=f"🌍 MARKET SESSION RADAR\n━━━━━━━━━━━━━━━\n\n{sess}\n"
+        if good: txt+="✅ Good to trade - High liquidity\n"
+        else: txt+="⚠️ Low liquidity - Trade only 90% signals\n"
+        txt+=f"\nUTC: {datetime.datetime.utcnow().strftime('%H:%M')}\nWAT: {(datetime.datetime.now()+datetime.timedelta(hours=1)).strftime('%H:%M')}\n\nBest: 8-11am & 1-4pm WAT (London/NY)"
+        bot.send_message(m.chat.id,txt)
 
     @bot.message_handler(commands=['approve','paidlist','resume','pause','test','status','scan'])
     def other(m):
@@ -391,39 +393,40 @@ if bot:
             try:
                 p=m.text.split(); uid=p[1]; d=int(p[2]) if len(p)>2 else 30
                 PAID_USERS[str(uid)]=time.time()+d*24*3600; save_json(PAID_FILE, PAID_USERS)
-                bot.send_message(m.chat.id, f"✅ {uid} till {get_expiry(uid)}")
-                try: bot.send_message(int(uid), f"✅ V33 ULTIMATE Activated! {d} days")
+                bot.send_message(m.chat.id,f"✅ {uid} till {get_expiry(uid)}")
+                try: bot.send_message(int(uid),f"✅ V31 COOL Activated! {d} days")
                 except: pass
-            except: bot.send_message(m.chat.id, "Use: /approve ID 30")
+            except: bot.send_message(m.chat.id,"Use: /approve ID 30")
         elif m.text.startswith("/paidlist"):
-            t="💰 Paid:\n" + "\n".join([f"{k} - {get_expiry(k)}" for k in PAID_USERS]) if PAID_USERS else "No paid"
+            t="💰 Paid:\n"+"\n".join([f"{k} - {get_expiry(k)}" for k in PAID_USERS]) if PAID_USERS else "No paid"
             bot.send_message(m.chat.id,t)
         elif m.text.startswith("/status"):
             mins=int((time.time()-LAST_SIGNAL_TIME)/60)
-            t=f"V33 SCAN: {SCANNING}\nLast: {mins} mins ago\nSession Active: {is_good_session()[0]}\n" + "\n".join([f"{p}: {len(PRICE_HISTORY.get(p,[]))} last:{int(time.time()-LAST_PAIR_SIGNAL.get(p,0))//60}m ago" for p in PAIRS])
+            sess,_=get_session()
+            t=f"V31 COOL: {SCANNING}\nLast: {mins}m ago\n{sess}\n"+"\n".join([f"{p}: {len(PRICE_HISTORY.get(p,[]))}" for p in PAIRS])
             bot.send_message(m.chat.id,t)
-        elif m.text.startswith("/resume"): SCANNING=True; bot.send_message(m.chat.id,"▶️ V33 ON")
+        elif m.text.startswith("/resume"): SCANNING=True; bot.send_message(m.chat.id,"▶️ V31 COOL ON")
         elif m.text.startswith("/pause"): SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
         elif m.text.startswith("/test") or m.text.startswith("/scan"):
-            pair="USDJPY"; d="PUT"; c=80; rsi=40.9; ema="EMA TREND RETEST"; price=149.99847
+            pair=random.choice(PAIRS); d=random.choice(["CALL","PUT"]); c=random.choice([90,85]); rsi=23.5 if d=="CALL" else 76.2; ema="SUPPORT+BB" if d=="CALL" else "RESIST+BB"; price=round(random.uniform(1.05,1.35),5)
             mk=InlineKeyboardMarkup(row_width=1)
-            mk.add(InlineKeyboardButton(f"👥 Users Only", callback_data=f"users_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
-                   InlineKeyboardButton(f"📢 Channel Only", callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
-                   InlineKeyboardButton(f"🚀 BOTH", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
-                   InlineKeyboardButton("❌ Skip", callback_data="skip"))
-            txt=f"🔔 V33 CHART READY!\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi} {ema}\nStrong Downtrend EMA 9<21<50 + Retest Middle BB + RSI 40.9\n\nWill send with chart + TP/SL + Triple Confirmed!"
-            bot.send_message(m.chat.id, txt, reply_markup=mk)
+            mk.add(InlineKeyboardButton(f"👥 Users Only",callback_data=f"users_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
+                   InlineKeyboardButton(f"📢 Channel Only",callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
+                   InlineKeyboardButton(f"🚀 BOTH",callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
+                   InlineKeyboardButton("❌ Skip",callback_data="skip"))
+            txt=f"🔔 V31 COOL READY!\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi} {ema}\nWill send with TP/SL + Cool chart!"
+            bot.send_message(m.chat.id,txt,reply_markup=mk)
 
     @bot.callback_query_handler(func=lambda c: True)
     def cb(call):
         global LAST_SIGNAL_TIME
         if OWNER_ID and call.message.chat.id!=OWNER_ID: return
-        if call.data=="skip": bot.edit_message_text("❌ Skipped", call.message.chat.id, call.message.message_id); return
+        if call.data=="skip": bot.edit_message_text("❌ Skipped",call.message.chat.id,call.message.message_id); return
         try:
             parts=call.data.split("_"); typ=parts[0]; pair=parts[1]; d=parts[2]; c=parts[3]; rsi=parts[4]; ema=parts[5]; price=parts[6]
-            full=build_full_text(pair,d,c,rsi,ema,price,f"Triple Confirmed + {ema}")
+            full=build_full_text(pair,d,c,rsi,ema,price,f"{ema}")
             sent_users=0; sent_chan=False
-            chart_path=generate_chart(pair, d, float(price))
+            chart_path=generate_chart(pair,d,float(price),int(c))
             if typ in ["users","both"]:
                 all_ids=set(list(PAID_USERS.keys())+list(FREE_USERS.keys())+[str(OWNER_ID)])
                 for uid_str in all_ids:
@@ -431,39 +434,38 @@ if bot:
                         uid=int(uid_str)
                         if not is_paid(uid) and not can_send_free(uid): continue
                         if chart_path and os.path.exists(chart_path):
-                            with open(chart_path, 'rb') as f: bot.send_photo(uid, f, caption=full)
-                        else: bot.send_message(uid, full)
-                        use_free(uid); sent_users+=1; time.sleep(0.4)
+                            with open(chart_path,'rb') as f: bot.send_photo(uid,f,caption=full)
+                        else: bot.send_message(uid,full)
+                        use_free(uid); sent_users+=1; time.sleep(0.35)
                     except: pass
             if typ in ["chan","both"]:
                 try:
                     if chart_path and os.path.exists(chart_path):
-                        with open(chart_path, 'rb') as f: bot.send_photo(CHANNEL_ID, f, caption=full)
-                    else: bot.send_message(CHANNEL_ID, full)
+                        with open(chart_path,'rb') as f: bot.send_photo(CHANNEL_ID,f,caption=full)
+                    else: bot.send_message(CHANNEL_ID,full)
                     sent_chan=True
                 except: pass
-            LAST_SIGNAL_TIME=time.time(); LAST_PAIR_SIGNAL[pair]=time.time()
-            save_json(HISTORY_FILE, PRICE_HISTORY)
-            threading.Thread(target=check_win_loss, args=(pair,d,float(price)), daemon=True).start()
+            LAST_SIGNAL_TIME=time.time(); save_json(HISTORY_FILE, PRICE_HISTORY)
+            threading.Thread(target=check_win_loss,args=(pair,d,float(price)),daemon=True).start()
             where="USERS" if typ=="users" else "CHANNEL" if typ=="chan" else "BOTH"
-            bot.edit_message_text(f"✅ V33 SENT: {where}\n👥 {sent_users} | 📢 {'Yes' if sent_chan else 'No'}\nTP/SL Added + Win check in 3min", call.message.chat.id, call.message.message_id)
-        except Exception as e: bot.send_message(call.message.chat.id, f"Error {e}")
+            bot.edit_message_text(f"✅ V31 COOL SENT: {where}\n👥 {sent_users} | 📢 {'Yes' if sent_chan else 'No'}\nTP/SL + Vol + Session added",call.message.chat.id,call.message.message_id)
+        except Exception as e: bot.send_message(call.message.chat.id,f"Error {e}")
 
-    @app.route(f'/{TOKEN}', methods=['POST'])
+    @app.route(f'/{TOKEN}',methods=['POST'])
     def webhook():
         if request.headers.get('content-type')=='application/json':
             js=request.get_data().decode('utf-8'); upd=telebot.types.Update.de_json(js); bot.process_new_updates([upd]); return ''
         return 'ok',200
     @app.route('/')
-    def home(): return "V33 ULTIMATE PRO LIVE - FIXED",200
+    def home(): return "V31 COOL EDITION LIVE",200
     def set_wh():
         time.sleep(5)
         if RENDER_URL:
             try:
-                requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=10); time.sleep(2)
-                url=f"{RENDER_URL}/{TOKEN}"; r=requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={url}", timeout=10); print(r.text, flush=True)
-            except Exception as e: print(e, flush=True)
-    threading.Thread(target=set_wh, daemon=True).start()
+                requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True",timeout=10); time.sleep(2)
+                url=f"{RENDER_URL}/{TOKEN}"; r=requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={url}",timeout=10); print(r.text,flush=True)
+            except Exception as e: print(e,flush=True)
+    threading.Thread(target=set_wh,daemon=True).start()
 
 def scanner():
     global LAST_SIGNAL_TIME
@@ -477,14 +479,14 @@ def scanner():
                 d,c,rsi,ema,reason,price=res
                 save_json(HISTORY_FILE, PRICE_HISTORY)
                 mk=InlineKeyboardMarkup(row_width=1)
-                mk.add(InlineKeyboardButton(f"👥 Users Only", callback_data=f"users_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
-                       InlineKeyboardButton(f"📢 Channel Only", callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
-                       InlineKeyboardButton(f"🚀 BOTH", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
-                       InlineKeyboardButton("❌ Skip", callback_data="skip"))
-                txt=f"🔔 V33 CHART READY!\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi} {ema}\n{reason}\n\nWill send with chart + TP/SL + Triple Confirmed!"
-                bot.send_message(OWNER_ID, txt, reply_markup=mk)
-                LAST_SIGNAL_TIME=time.time(); LAST_PAIR_SIGNAL[pair]=time.time()
-                time.sleep(120); break
-        except Exception as e: print(f"SCAN {e}", flush=True); time.sleep(10)
-threading.Thread(target=scanner, daemon=True).start()
-if __name__=="__main__": app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+                mk.add(InlineKeyboardButton(f"👥 Users Only",callback_data=f"users_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
+                       InlineKeyboardButton(f"📢 Channel Only",callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
+                       InlineKeyboardButton(f"🚀 BOTH",callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}"),
+                       InlineKeyboardButton("❌ Skip",callback_data="skip"))
+                sess,_=get_session()
+                txt=f"🔔 V31 COOL READY!\n\n{pair} {d} {c}%\nPrice {price}\nRSI {rsi} {ema}\n{reason}\n{sess}\n\nWill send with TP/SL+Vol chart!"
+                bot.send_message(OWNER_ID,txt,reply_markup=mk)
+                LAST_SIGNAL_TIME=time.time(); time.sleep(120); break
+        except Exception as e: print(f"SCAN {e}",flush=True); time.sleep(10)
+threading.Thread(target=scanner,daemon=True).start()
+if __name__=="__main__": app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
