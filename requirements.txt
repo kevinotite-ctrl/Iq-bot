@@ -1,4 +1,7 @@
-Flask
 pyTelegramBotAPI
-requests
+Flask
+yfinance
 matplotlib
+pandas
+requests
+lxml
