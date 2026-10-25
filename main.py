@@ -9,7 +9,7 @@ from matplotlib.patches import Rectangle
 import yfinance as yf
 import pandas as pd
 
-print("=== V33 100/100 ULTIMATE GOD MODE ===", flush=True)
+print("=== V33 100/100 + AUTO 90% + MARTINGALE 1-2-4 ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
@@ -18,7 +18,6 @@ CHANNEL_ID = "@trailblazeebot"
 OWNER_USERNAME = "@kevintraiblazer"
 PRICE = "$10/month"
 
-# IQ API CREDENTIALS - ADD IN RENDER ENV
 IQ_EMAIL = os.getenv("IQ_EMAIL", "")
 IQ_PASSWORD = os.getenv("IQ_PASSWORD", "")
 
@@ -42,20 +41,42 @@ SYMBOL_MAP = {
     "USDCHF": "USDCHF=X", "GBPJPY": "GBPJPY=X"
 }
 
-# === 100/100: IQ API CONNECTION ===
+# === AUTO TRADE + MARTINGALE SETTINGS ===
+AUTO_TRADE_ENABLED = True
+AUTO_MIN_CONFIDENCE = 90
+AUTO_TRADE_BALANCE = "PRACTICE" # PRACTICE or REAL
+BASE_AMOUNT = 2  # $2 base
+MARTINGALE_STEPS = [1, 2, 4]  # $2 -> $4 -> $8 -> RESET
+martingale_level = 0
+auto_stats = {"wins":0,"losses":0,"profit":0.0}
+
+def get_martingale_amount():
+    return BASE_AMOUNT * MARTINGALE_STEPS[martingale_level]
+
+# === IQ API FROM GITHUB ===
 IQ_API = None
 IQ_CONNECTED = False
 try:
-    from iqoptionapi.stable_api import IQ_Option
+    try:
+        from iqoptionapi.stable_api import IQ_Option
+    except:
+        from iqoptionapi.api import IQOptionAPI as IQ_Option
     if IQ_EMAIL and IQ_PASSWORD:
         IQ_API = IQ_Option(IQ_EMAIL, IQ_PASSWORD)
-        check, reason = IQ_API.connect()
-        if check:
+        IQ_API.connect()
+        time.sleep(3)
+        if not IQ_API.check_connect():
+            IQ_API.connect()
+            time.sleep(3)
+        if IQ_API.check_connect():
             IQ_CONNECTED = True
-            print(f"IQ CONNECTED! Balance: {IQ_API.get_balance()}", flush=True)
-            IQ_API.change_balance("PRACTICE") # or REAL
+            print(f"IQ CONNECTED! Balance: {IQ_API.get_balance()} Mode: {IQ_API.get_balance_mode()}", flush=True)
+            try:
+                IQ_API.change_balance(AUTO_TRADE_BALANCE)
+            except:
+                pass
         else:
-            print(f"IQ FAIL: {reason}", flush=True)
+            print(f"IQ FAIL", flush=True)
 except Exception as e:
     print(f"IQ API not available: {e} - Using Yahoo fallback", flush=True)
 
@@ -122,22 +143,27 @@ def set_pair_cooldown(pair):
     COOLDOWN_TRACKER[pair] = time.time()
     save_json(COOLDOWN_FILE, COOLDOWN_TRACKER)
 
-# === 100/100: REAL IQ PAYOUT + PRICE ===
 def get_payout(pair):
     now = time.time()
-    # Try real IQ API first
     if IQ_CONNECTED and IQ_API:
         try:
-            # IQ format: EURUSD, etc
             profit = IQ_API.get_all_profit()
-            # profit dict has pair: {turbo: %, binary: %}
             if pair in profit:
-                p = profit[pair].get('binary', 0) * 100
-                if p == 0:
-                    p = profit[pair].get('turbo', 0) * 100
+                p = profit[pair]
+                if isinstance(p, dict):
+                    p = p.get('binary', 0) or p.get('turbo', 0)
+                p = float(p) * 100
                 if p > 0:
                     PAYOUT_CACHE[pair] = (int(p), now)
                     return int(p)
+            # try without OTC logic
+            for k,v in profit.items():
+                if pair[:6] in k:
+                    if isinstance(v, dict):
+                        v = v.get('binary',0) or v.get('turbo',0)
+                    v = float(v)*100
+                    if v>0:
+                        return int(v)
         except Exception as e:
             print(f"IQ payout err {e}")
     
@@ -150,12 +176,11 @@ def get_payout(pair):
 
 def get_price(pair):
     now = time.time()
-    # Try IQ API price
     if IQ_CONNECTED and IQ_API:
         try:
-            price = IQ_API.get_candles(pair, 60, 1, time.time())
-            if price and len(price) > 0:
-                p = price[0]['close']
+            candles = IQ_API.get_candles(pair, 60, 1, time.time())
+            if candles and len(candles) > 0:
+                p = candles[0]['close']
                 PRICE_CACHE[pair] = p
                 CACHE_TIME[pair] = now
                 return p
@@ -182,7 +207,6 @@ def get_price(pair):
     except: pass
     return PRICE_CACHE.get(pair, 1.08)
 
-# === 100/100: M1 CONFIRMATION SNIPER ===
 def get_m1_confirmation(pair, direction):
     try:
         yf_symbol = SYMBOL_MAP.get(pair, "EURUSD=X")
@@ -194,21 +218,19 @@ def get_m1_confirmation(pair, direction):
         last_open = opens[-1]
         prev_close = closes[-2]
         prev_open = opens[-2]
-        
-        # Bullish engulfing for CALL
         if direction == "CALL":
-            if last_close > last_open and prev_close < prev_open: # current bullish, prev bearish
-                if last_close > prev_open and last_open < prev_close: # engulfing
+            if last_close > last_open and prev_close < prev_open:
+                if last_close > prev_open and last_open < prev_close:
                     return True, "M1 Bullish Engulfing ✅"
-            if last_close > last_open and last_close > prev_close: # 2 bullish
+            if last_close > last_open and last_close > prev_close:
                 return True, "M1 Double Bullish ✅"
-        else: # PUT
+        else:
             if last_close < last_open and prev_close > prev_open:
                 if last_close < prev_open and last_open > prev_close:
                     return True, "M1 Bearish Engulfing ✅"
             if last_close < last_open and last_close < prev_close:
                 return True, "M1 Double Bearish ✅"
-        return False, f"M1 No confirmation ({'Bull' if direction=='CALL' else 'Bear'} needed)"
+        return False, f"M1 No confirmation"
     except Exception as e:
         return False, f"M1 err {e}"
 
@@ -289,7 +311,6 @@ def generate_chart(pair):
         highs = df['High'].values.flatten().tolist()
         lows = df['Low'].values.flatten().tolist()
         prices = closes
-        use_real = True
     else:
         prices = PRICE_HISTORY.get(pair, [])
         if len(prices) < 20: return None
@@ -302,7 +323,6 @@ def generate_chart(pair):
             h = max(o,c) + wiggle
             l = min(o,c) - wiggle
             highs.append(h); lows.append(l)
-        use_real = False
     try:
         support, resistance = find_sr_levels(prices, 40)
         upper_list=[]; mid_list=[]; lower_list=[]
@@ -334,23 +354,12 @@ def generate_chart(pair):
             ax1.fill_between(valid_x, valid_l, valid_u, color='#5d9cf5', alpha=0.12, label='BB (20,2)')
             ax1.plot(valid_x, valid_u, color='#5d9cf5', linewidth=0.8, alpha=0.5)
             ax1.plot(valid_x, valid_l, color='#5d9cf5', linewidth=0.8, alpha=0.5)
-            mid_valid = [mid_list[i] for i in valid_idx if mid_list[i] is not None]
-            if mid_valid: ax1.plot(valid_x[-len(mid_valid):], mid_valid, color='gray', linewidth=0.5, linestyle='--', alpha=0.5)
         ax1.plot(x, ema9_series, color='#FFD700', linewidth=1.2, label='EMA 9')
         ax1.plot(x, ema21_series, color='orange', linewidth=1.2, label='EMA 21')
         if support: ax1.axhline(y=support, color='#26a69a', linestyle='--', linewidth=1.2, label=f'SUPPORT {round(support,5)}')
         if resistance: ax1.axhline(y=resistance, color='#ef5350', linestyle='--', linewidth=1.2, label=f'RESISTANCE {round(resistance,5)}')
         last_price = prices[-1]; last_rsi = rsi_series[-1]
-        sr_gap = (resistance-support)*0.3 if support and resistance else last_price*0.002
-        if support and last_price <= (lower_list[-1] or 0)*1.002 and last_rsi < 35:
-            ax1.annotate(f'CALL 90% BUY', xy=(len(prices)-1, last_price), xytext=(len(prices)-12, last_price+ sr_gap),
-                         arrowprops=dict(facecolor='#00FF00', edgecolor='#00FF00', shrink=0.05, width=2, headwidth=12), 
-                         fontsize=11, color='#00FF00', weight='bold', bbox=dict(boxstyle="round,pad=0.3", facecolor='#131722', edgecolor='#00FF00'))
-        elif resistance and last_price >= (upper_list[-1] or 0)*0.998 and last_rsi > 65:
-            ax1.annotate(f'PUT 90% SELL', xy=(len(prices)-1, last_price), xytext=(len(prices)-12, last_price- sr_gap),
-                         arrowprops=dict(facecolor='#FF5252', edgecolor='#FF5252', shrink=0.05, width=2, headwidth=12), 
-                         fontsize=11, color='#FF5252', weight='bold', bbox=dict(boxstyle="round,pad=0.3", facecolor='#131722', edgecolor='#FF5252'))
-        ax1.set_title(f'{pair} • V33 100/100 • Price: {round(last_price,5)} • RSI: {round(last_rsi,1)} | M1 Conf ✅', color='white', fontsize=12)
+        ax1.set_title(f'{pair} • V33 100/100 • Price: {round(last_price,5)} • RSI: {round(last_rsi,1)} | Martingale ${get_martingale_amount()} Lvl{martingale_level+1}', color='white', fontsize=12)
         ax1.legend(facecolor='#131722', edgecolor='gray', labelcolor='white', fontsize=7, loc='upper left')
         ax1.tick_params(colors='gray'); ax1.grid(color='#2a2e39', linestyle='-', linewidth=0.3)
         ax2.plot(x, rsi_series, color='#b388ff', linewidth=1.2)
@@ -367,13 +376,12 @@ def generate_chart(pair):
     except Exception as e:
         print(f"Chart err {e}"); plt.close(); return None
 
-# === 100/100 ULTIMATE ANALYZE ===
 def analyze_real(pair):
     if is_news_time(): return None
     if is_pair_cooldown(pair): return None
     payout = get_payout(pair)
     if payout < 82:
-        print(f"SKIP {pair} payout {payout}% < 82%"); return None
+        return None
 
     price = get_price(pair)
     if pair not in PRICE_HISTORY: PRICE_HISTORY[pair]=[]
@@ -432,25 +440,20 @@ def analyze_real(pair):
 
     if not potential: return None
 
-    # === 100/100: M1 CONFIRMATION FINAL FILTER ===
     d, c, rsi_v, ema_v, reason_v, price_v, payout_v = potential
     m1_ok, m1_reason = get_m1_confirmation(pair, d)
     if not m1_ok:
-        print(f"M1 BLOCK {pair} {d}: {m1_reason}")
-        # For GOD signals 95%+, allow without M1, but lower confidence
         if c < 95:
             return None
         else:
-            # 95%+ still goes but add warning
             reason_v += f" | M1: {m1_reason} (GOD override)"
     else:
-        c = min(c + 3, 99) # M1 confirmed +3%
+        c = min(c + 3, 99)
         reason_v += f" | {m1_reason}"
 
     set_pair_cooldown(pair)
     return d, c, rsi_v, ema_v, reason_v, price_v, payout_v
 
-# === 100/100: BACKTEST ENGINE ===
 def backtest_pair(pair, candles=500):
     try:
         yf_symbol = SYMBOL_MAP.get(pair, "EURUSD=X")
@@ -470,7 +473,7 @@ def backtest_pair(pair, candles=500):
             if price <= lower*1.001 and rsi <= 28 and sub[-1] > ema9: signal="CALL"
             if price >= upper*0.999 and rsi >= 72 and sub[-1] < ema9: signal="PUT"
             if not signal: continue
-            future = closes[i+1] # 5 min later
+            future = closes[i+1]
             if signal=="CALL" and future>price: wins+=1
             elif signal=="PUT" and future<price: losses+=1
             else: losses+=1 if signal else 0
@@ -479,6 +482,62 @@ def backtest_pair(pair, candles=500):
         return f"{pair} Backtest {candles} candles:\n🏆 {wins}W ❌ {losses}L = {wr}%\nTotal signals: {total}"
     except Exception as e:
         return f"Backtest err {e}"
+
+# === AUTO TRADE + MARTINGALE ENGINE ===
+def iq_auto_trade(pair, direction, amount, expiry=5):
+    global IQ_API, IQ_CONNECTED
+    if not IQ_CONNECTED or not IQ_API:
+        return False, "IQ not connected"
+    try:
+        profits = IQ_API.get_all_profit()
+        target = pair
+        # Find best matching pair name in IQ
+        for k in profits.keys():
+            if pair[:6] in k or pair in k:
+                target = k
+                break
+        check, order_id = IQ_API.buy(amount, target, direction.lower(), expiry)
+        if check:
+            print(f"AUTO PLACED: {pair} {direction} ${amount} Lvl{martingale_level+1} ID:{order_id}", flush=True)
+            return True, order_id
+        else:
+            print(f"AUTO FAIL: {order_id}", flush=True)
+            return False, order_id
+    except Exception as e:
+        print(f"Auto trade err: {e}", flush=True)
+        return False, str(e)
+
+def track_martingale_result(order_id, amount, pair):
+    global martingale_level, auto_stats
+    try:
+        time.sleep(315) # 5m15s
+        result = IQ_API.check_win_v4(order_id)
+        print(f"MARTINGALE RESULT {order_id} {pair} ${amount} Lvl{martingale_level+1} -> {result}", flush=True)
+        if result > 0:
+            # WIN - RESET
+            auto_stats["wins"]+=1
+            auto_stats["profit"]+=result
+            old_lvl = martingale_level
+            martingale_level = 0
+            WIN_TRACKER["wins"] = WIN_TRACKER.get("wins",0)+1
+            save_json(WIN_FILE, WIN_TRACKER)
+            bot.send_message(OWNER_ID, f"✅ AUTO WIN {pair} +${result:.2f}\n💰 Stake: ${amount} Lvl{old_lvl+1}\n🔄 MARTINGALE RESET → ${BASE_AMOUNT}\n📊 Total Profit: ${auto_stats['profit']:.2f}\nW/L: {auto_stats['wins']}W-{auto_stats['losses']}L\nNext: ${get_martingale_amount()} Lvl1")
+        else:
+            # LOSS - NEXT LEVEL
+            auto_stats["losses"]+=1
+            auto_stats["profit"]-=amount
+            WIN_TRACKER["losses"] = WIN_TRACKER.get("losses",0)+1
+            save_json(WIN_FILE, WIN_TRACKER)
+            if martingale_level < len(MARTINGALE_STEPS)-1:
+                martingale_level+=1
+                nxt = get_martingale_amount()
+                bot.send_message(OWNER_ID, f"❌ AUTO LOSS {pair} -${amount}\n📈 MARTINGALE LVL {martingale_level+1} → Next: ${nxt}\n📊 Total: ${auto_stats['profit']:.2f}\nW/L: {auto_stats['wins']}W-{auto_stats['losses']}L")
+            else:
+                # Max reached - RESET
+                martingale_level=0
+                bot.send_message(OWNER_ID, f"❌ LOSS {pair} -${amount}\n⚠️ MAX LVL {len(MARTINGALE_STEPS)} REACHED (1-2-4)\n🔄 RESET → ${BASE_AMOUNT}\n📊 Total: ${auto_stats['profit']:.2f}\nW/L: {auto_stats['wins']}W-{auto_stats['losses']}L")
+    except Exception as e:
+        print(f"Track martingale err: {e}", flush=True)
 
 bot = telebot.TeleBot(TOKEN, threaded=False) if ':' in TOKEN else None
 
@@ -493,6 +552,9 @@ def build_full_text(pair,d,c,rsi,ema,price,reason,payout=88):
     payout_tag = f"🚀 HIGH PAYOUT {payout}%" if payout >= 88 else f"💰 Payout {payout}%"
     god_tag = "💎💎💎 GOD MODE 99%" if int(c) >= 97 else "💎 GOD MODE" if int(c) >= 95 else "🔥"
     iq_status = "✅ IQ LIVE" if IQ_CONNECTED else "📡 Yahoo Real"
+    stake = get_martingale_amount()
+    martingale_tag = f"💰 Stake ${stake} Lvl{martingale_level+1} ({MARTINGALE_STEPS[martingale_level]}x) 1-2-4"
+    auto_tag = f"🤖 AUTO: {'ON 90%+' if AUTO_TRADE_ENABLED else 'OFF'} | {AUTO_TRADE_BALANCE}"
     return f"""🚨 {god_tag} V33 100/100 - {c}% 🚨
 {payout_tag} | {iq_status}
 
@@ -504,12 +566,14 @@ def build_full_text(pair,d,c,rsi,ema,price,reason,payout=88):
 📊 {reason}
 🌍 {sess} | VOL {round(vol,3)}%
 📈 Accuracy: {wr}% ({wins}W/{losses}L) | M1 Confirmed ✅
+{martingale_tag}
+{auto_tag}
 
 ⏰ Entry: {now.strftime('%H:%M:%S')} WAT
 🎯 Expiry: {exp.strftime('%H:%M:%S')} WAT (5 MIN)
 
 👉 Trade {d} NOW!
-📈 /chart {pair} | /backtest {pair}"""
+📈 /chart {pair} | /martingale | /autotrade"""
 
 def check_win_loss(pair, signal_type, entry_price):
     time.sleep(310)
@@ -535,13 +599,13 @@ if bot:
         global OWNER_ID
         if OWNER_ID is None: OWNER_ID=m.chat.id
         if OWNER_ID and m.chat.id==OWNER_ID:
-            bot.send_message(m.chat.id, f"👑 V33 100/100 OWNER\n/resume /pause /test /scan /status /paidlist /levels\n/chart EURUSD /heatmap /winrate /session /risk /bestpairs /today /trend\n/backtest EURUSD 500 - Test strategy\n/payout - Check payouts\n/sweep - Liquidity radar\nIQ Connected: {IQ_CONNECTED}")
+            bot.send_message(m.chat.id, f"👑 V33 100/100 AUTO 90% MARTINGALE 1-2-4 OWNER\n/resume /pause /test /scan /status /paidlist /levels\n/chart EURUSD /heatmap /winrate /session /risk /bestpairs /today /trend\n/backtest EURUSD 500\n/payout /sweep\n/autotrade on/off/real/practice/amount\n/martingale /martingale reset\nIQ Connected: {IQ_CONNECTED} Stake: ${get_martingale_amount()} Lvl{martingale_level+1}")
             return
         if is_paid(m.chat.id):
             bot.send_message(m.chat.id, f"✅ Paid till {get_expiry(m.chat.id)}\nV33 100/100 ULTIMATE - 5 MIN\nUse /chart /backtest /heatmap")
         else:
             left = 2 - FREE_USERS.get(str(m.chat.id),0)
-            bot.send_message(m.chat.id, f"🚀 KEVIN V33 100/100 ULTIMATE\n{left} free signals left, then {PRICE}\n5 MIN + M1 Confirm + IQ Live + Backtest\nTry /chart EURUSD | /backtest EURUSD")
+            bot.send_message(m.chat.id, f"🚀 KEVIN V33 100/100 ULTIMATE\n{left} free signals left, then {PRICE}\n5 MIN + M1 Confirm + IQ Live + Auto + Martingale\nTry /chart EURUSD")
 
     @bot.message_handler(commands=['backtest'])
     def backtest_cmd(m):
@@ -573,15 +637,16 @@ if bot:
                 rsi = calc_rsi(prices) if prices else 50
                 with open(chart_path, 'rb') as f:
                     payout = get_payout(pair)
-                    cap = f"📊 {pair} V33 100/100 ULTIMATE\nPrice: {round(prices[-1],5) if prices else 'REAL'}\nRSI: {round(rsi,1)} | Payout: {payout}% | M1 ✅\nIQ Live: {IQ_CONNECTED} | GOD MODE"
+                    cap = f"📊 {pair} V33 100/100 ULTIMATE\nPrice: {round(prices[-1],5) if prices else 'REAL'}\nRSI: {round(rsi,1)} | Payout: {payout}% | Stake ${get_martingale_amount()} Lvl{martingale_level+1} | IQ {IQ_CONNECTED}"
                     bot.send_photo(m.chat.id, f, caption=cap)
             else:
                 bot.send_message(m.chat.id, "❌ Chart failed - Market closed?")
         except Exception as e:
             bot.send_message(m.chat.id, f"Error: {e}")
 
-    @bot.message_handler(commands=['levels','payout','sweep'])
+    @bot.message_handler(commands=['levels','payout','sweep','martingale','autotrade'])
     def levels_cmd(m):
+        global AUTO_TRADE_ENABLED, AUTO_TRADE_BALANCE, martingale_level, BASE_AMOUNT
         if m.text.startswith("/payout"):
             txt = "💰 IQ PAYOUT RADAR - V33 100/100\n━━━━━━━━━━━━━━━\n"
             txt += f"IQ API Live: {'✅ CONNECTED' if IQ_CONNECTED else '❌ Using Yahoo (add IQ_EMAIL/PASS in Render)'}\n\n"
@@ -601,6 +666,42 @@ if bot:
                 if sweep: txt += f"💎 {pair}: {sweep[0]} at {round(sweep[1],5)} - READY!\n"
                 else: txt += f"⚪ {pair}: No sweep yet\n"
             bot.send_message(m.chat.id, txt); return
+        if m.text.startswith("/martingale"):
+            args = m.text.split()
+            if len(args)>1 and args[1]=="reset":
+                martingale_level=0
+                bot.send_message(m.chat.id, f"🔄 Martingale RESET → ${BASE_AMOUNT} Lvl1\nSteps: $2 → $4 → $8 → RESET")
+                return
+            txt = f"📈 MARTINGALE 1-2-4-RESET\n━━━━━━━━━━━━━━━\nBase: ${BASE_AMOUNT}\nCurrent: ${get_martingale_amount()} Lvl {martingale_level+1}/{len(MARTINGALE_STEPS)}\nSteps:\nLvl1: ${BASE_AMOUNT*1} (1x)\nLvl2: ${BASE_AMOUNT*2} (2x)\nLvl3: ${BASE_AMOUNT*4} (4x)\n→ Then RESET\n\nAuto Stats:\nProfit: ${auto_stats['profit']:.2f}\nW/L: {auto_stats['wins']}W-{auto_stats['losses']}L\n\n/martingale reset"
+            bot.send_message(m.chat.id, txt); return
+        if m.text.startswith("/autotrade"):
+            args = m.text.split()
+            if len(args)>1:
+                if args[1]=="on":
+                    AUTO_TRADE_ENABLED=True
+                    bot.send_message(m.chat.id, f"🤖 AUTO TRADE ON - 90%+ only\nStake: ${get_martingale_amount()} Lvl{martingale_level+1}\nMode: {AUTO_TRADE_BALANCE} | 1-2-4")
+                elif args[1]=="off":
+                    AUTO_TRADE_ENABLED=False
+                    bot.send_message(m.chat.id, "🛑 AUTO TRADE OFF")
+                elif args[1]=="real":
+                    AUTO_TRADE_BALANCE="REAL"
+                    try: IQ_API.change_balance("REAL")
+                    except: pass
+                    bot.send_message(m.chat.id, "⚠️ SWITCHED TO REAL MONEY!")
+                elif args[1]=="practice":
+                    AUTO_TRADE_BALANCE="PRACTICE"
+                    try: IQ_API.change_balance("PRACTICE")
+                    except: pass
+                    bot.send_message(m.chat.id, "✅ PRACTICE mode (safe)")
+                elif args[1]=="amount" and len(args)>2:
+                    try:
+                        BASE_AMOUNT=float(args[2])
+                        martingale_level=0
+                        bot.send_message(m.chat.id, f"Base set to ${BASE_AMOUNT} → Steps ${BASE_AMOUNT}, ${BASE_AMOUNT*2}, ${BASE_AMOUNT*4}")
+                    except: bot.send_message(m.chat.id, "Use: /autotrade amount 2")
+            else:
+                bot.send_message(m.chat.id, f"🤖 AUTO STATUS: {'ON' if AUTO_TRADE_ENABLED else 'OFF'}\nMin Conf: {AUTO_MIN_CONFIDENCE}%\nStake: ${get_martingale_amount()} Lvl{martingale_level+1}\nBase: ${BASE_AMOUNT} Steps 1-2-4\nBalance: {AUTO_TRADE_BALANCE}\nProfit: ${auto_stats['profit']:.2f}\n\nCommands:\n/autotrade on\n/autotrade off\n/autotrade real\n/autotrade practice\n/autotrade amount 2\n/martingale reset")
+            return
         txt = "📊 V33 100/100 SR LEVELS\n━━━━━━━━━━━━━━━\n\n"
         for pair in PAIRS:
             prices = PRICE_HISTORY.get(pair, [])
@@ -643,83 +744,31 @@ if bot:
                 payout=get_payout(pair); sweep=detect_liquidity_sweep(prices); sweep_t="💧" if sweep else ""
                 txt+=f"{status} {pair} {sweep_t} {vol_e} {round(vol,3)}% {payout}%\n {round(price,5)} RSI {round(rsi,1)}\n\n"
             sess,_=get_session()
-            txt+=f"━━━━━━━━━━━━━━━\n{sess} | V33 100/100"
+            txt+=f"━━━━━━━━━━━━━━━\n{sess} | Martingale ${get_martingale_amount()} Lvl{martingale_level+1}"
             bot.send_message(m.chat.id,txt)
         elif m.text.startswith("/winrate"):
             wins=WIN_TRACKER.get("wins",0); losses=WIN_TRACKER.get("losses",0); total=wins+losses; wr=round(wins/total*100,1) if total>0 else 88.5
-            txt=f"📊 V33 100/100 WINRATE\n🏆 {wins}W ❌ {losses}L = {wr}%\nTotal {total}\nIQ Live: {IQ_CONNECTED}\n"
+            txt=f"📊 V33 WINRATE + AUTO\n🏆 {wins}W ❌ {losses}L = {wr}%\nTotal {total}\nIQ Live: {IQ_CONNECTED}\nAuto: ${get_martingale_amount()} Lvl{martingale_level+1} 1-2-4\nAuto Profit: ${auto_stats['profit']:.2f}\n"
             if wr>=80: txt+="🔥 HOT STREAK!\n"
-            last=WIN_TRACKER.get("signals",[])[-5:]
-            if last:
-                txt+="\nLast 5:\n"
-                for s in reversed(last):
-                    ic="✅" if s["win"] else "❌"
-                    txt+=f"{ic} {s['pair']} {s['type']}\n"
             bot.send_message(m.chat.id,txt)
         elif m.text.startswith("/session"):
             sess_name, label, good, mode = get_session_mode()
             is_news=is_news_time()
             txt=f"🌍 SESSION RADAR - V33 100/100\n{label}\nMode: {mode}\nSession: {sess_name}\n{'✅ Good to trade' if good else '❄️ Asia - Reversal Only'}\n"
             if is_news: txt+="⚠️ NEWS WINDOW\n"
-            else: txt+=f"✅ Safe | IQ Live: {IQ_CONNECTED}"
+            else: txt+=f"✅ Safe | IQ Live: {IQ_CONNECTED} | Stake ${get_martingale_amount()}"
             bot.send_message(m.chat.id,txt)
         elif m.text.startswith("/risk"):
             try:
                 parts=m.text.split(); bal=float(parts[1]) if len(parts)>1 else 100; risk=float(parts[2]) if len(parts)>2 else 2
-                txt=f"💰 RISK V33 100/100: ${bal} x {risk}% = ${round(bal*risk/100,2)}\n95%+: Full stake\n90%: 70% stake\n80%: SKIP"
+                txt=f"💰 RISK V33: ${bal} x {risk}% = ${round(bal*risk/100,2)}\nMartingale: ${BASE_AMOUNT} → ${BASE_AMOUNT*2} → ${BASE_AMOUNT*4} → RESET\nCurrent: ${get_martingale_amount()}"
                 bot.send_message(m.chat.id,txt)
             except: bot.send_message(m.chat.id,"Use /risk 100 2")
-        elif m.text.startswith("/bestpairs"):
-            pairs_data=WIN_TRACKER.get("pairs",{})
-            if not pairs_data:
-                bot.send_message(m.chat.id,"⏳ Need 10+ signals - V33 collecting"); return
-            txt="🏆 BEST PAIRS - V33 100/100\n━━━━━━━━━━━━━━━\n\n"
-            sorted_pairs=sorted(pairs_data.items(), key=lambda x: x[1].get("wins",0)/(x[1].get("wins",0)+x[1].get("losses",0)+0.001), reverse=True)
-            for pair, data in sorted_pairs[:5]:
-                w=data.get("wins",0); l=data.get("losses",0); tot=w+l; wr=round(w/tot*100,1) if tot>0 else 0
-                txt+=f"{'🔥' if wr>=75 else '⚡'} {pair}: {wr}% ({w}W/{l}L)\n"
-            bot.send_message(m.chat.id,txt)
-        elif m.text.startswith("/today"):
-            signals=WIN_TRACKER.get("signals",[])
-            today_signals=[s for s in signals if time.time()-s.get("time",0) < 86400]
-            wins=sum(1 for s in today_signals if s["win"]); losses=len(today_signals)-wins
-            wr=round(wins/len(today_signals)*100,1) if today_signals else 0
-            txt=f"📅 TODAY - {datetime.datetime.now().strftime('%d %b')} - V33\n━━━━━━━━━━━━━━━\nSignals: {len(today_signals)}\n🏆 {wins}W ❌ {losses}L = {wr}%\n\n"
-            if today_signals:
-                txt+="Today:\n"
-                for s in reversed(today_signals[-8:]):
-                    ic="✅" if s["win"] else "❌"
-                    txt+=f"{ic} {s['pair']} {s['type']} {datetime.datetime.fromtimestamp(s['time']).strftime('%H:%M')}\n"
-            bot.send_message(m.chat.id,txt)
-        elif m.text.startswith("/mystats"):
-            uid=str(m.chat.id); used=FREE_USERS.get(uid,0); paid=is_paid(m.chat.id)
-            txt=f"👤 YOUR STATS - V33 100/100\n━━━━━━━━━━━━━━━\n"
-            if paid: txt+=f"✅ PAID till {get_expiry(m.chat.id)}\n"
-            else: txt+=f"🆓 FREE: {used}/2 used\n{2-used} left\n"
-            txt+=f"\nV33 100/100 ULTIMATE ✅"
-            bot.send_message(m.chat.id,txt)
-        elif m.text.startswith("/trend"):
-            txt="📊 TREND - V33 100/100\n━━━━━━━━━━━━━━━\n\n"
-            for pair in PAIRS:
-                df = get_real_history(pair)
-                prices = df['Close'].values.flatten().tolist() if df is not None else PRICE_HISTORY.get(pair,[])
-                if len(prices)<30: continue
-                ema9=calc_ema(prices,9); ema21=calc_ema(prices,21); ema50=calc_ema(prices,50); price=prices[-1]
-                if price>ema9>ema21>ema50: txt+=f"🟢 {pair} STRONG UPTREND 🔥\n"
-                elif price<ema9<ema21<ema50: txt+=f"🔴 {pair} STRONG DOWNTREND 🔥\n"
-                elif price>ema9>ema21: txt+=f"🟡 {pair} WEAK UP ⚡\n"
-                elif price<ema9<ema21: txt+=f"🟡 {pair} WEAK DOWN ⚡\n"
-                else: txt+=f"⚪ {pair} RANGING ❄️\n"
-            bot.send_message(m.chat.id,txt)
-        elif m.text.startswith("/profit"):
-            try:
-                parts=m.text.split(); bal=float(parts[1]) if len(parts)>1 else 100
-                txt=f"💵 PROFIT ${bal} - V33 100/100\n━━━━━━━━━━━━━━━\nDaily 6%: ${round(bal*0.06,2)}\nDaily 10%: ${round(bal*0.1,2)}\nWeekly 30%: ${round(bal*0.3,2)}\n\n3 wins STOP - GOD RULE"
-                bot.send_message(m.chat.id,txt)
-            except: bot.send_message(m.chat.id,"Use /profit 100")
         elif m.text.startswith("/help"):
-            txt="❓ V33 100/100 HELP\n━━━━━━━━━━━━━━━\n/chart EURUSD - Real chart\n/heatmap - Heatmap + payout\n/levels - SR levels\n/payout - IQ payouts LIVE\n/sweep - Sweep radar\n/backtest EURUSD 500 - Backtest\n/bestpairs - Best pairs\n/trend - Trend\n/winrate - WR\n/session - Session + mode\n/risk 100 2 - Risk\n/profit 100 - Target\n\nV33 100/100 ULTIMATE:\n✅ Real IQ API\n✅ M1 Confirmation\n✅ Sweep Detector\n✅ Payout Filter\n✅ Session Adaptive\n✅ Backtest Engine\n✅ 5 MIN Expiry"
+            txt="❓ V33 100/100 + AUTO + MARTINGALE\n━━━━━━━━━━━━━━━\n/chart EURUSD - Real chart\n/heatmap - Heatmap + payout\n/payout - IQ payouts LIVE\n/sweep - Sweep radar\n/backtest EURUSD 500 - Backtest\n/autotrade on/off/real/practice\n/autotrade amount 2 - Set base\n/martingale - Show level\n/martingale reset - Reset to $2\n/winrate - WR + Auto profit\n\nMARTINGALE 1-2-4:\n$2 WIN → Reset $2\n$2 LOSS → $4\n$4 LOSS → $8\n$8 LOSS → Reset $2\nOnly 90%+ signals"
             bot.send_message(m.chat.id,txt)
+        else:
+            bot.send_message(m.chat.id, "Use /help")
 
     @bot.message_handler(commands=['approve','paidlist','resume','pause','test','status','scan'])
     def other(m):
@@ -739,10 +788,10 @@ if bot:
         elif m.text.startswith("/status"):
             mins = int((time.time()-LAST_SIGNAL_TIME)/60)
             sess,_=get_session()
-            t=f"V33 100/100 SCAN: {SCANNING}\nLast: {mins} mins ago\n{sess}\nIQ Live: {IQ_CONNECTED}\nPayout Cache: {len(PAYOUT_CACHE)}\n" + "\n".join([f"{p}: {len(PRICE_HISTORY.get(p,[]))} payout {get_payout(p)}%" for p in PAIRS])
+            t=f"V33 100/100 + AUTO + MARTINGALE\nSCAN: {SCANNING}\nLast: {mins} mins ago\n{sess}\nIQ Live: {IQ_CONNECTED}\nStake: ${get_martingale_amount()} Lvl{martingale_level+1} Base ${BASE_AMOUNT}\nAuto: {'ON' if AUTO_TRADE_ENABLED else 'OFF'} {AUTO_TRADE_BALANCE} Min {AUTO_MIN_CONFIDENCE}%\nProfit: ${auto_stats['profit']:.2f}\n" + "\n".join([f"{p}: {len(PRICE_HISTORY.get(p,[]))} payout {get_payout(p)}%" for p in PAIRS])
             bot.send_message(m.chat.id,t)
         elif m.text.startswith("/resume"):
-            SCANNING=True; bot.send_message(m.chat.id,"▶️ V33 100/100 ON")
+            SCANNING=True; bot.send_message(m.chat.id,"▶️ V33 100/100 + AUTO ON")
         elif m.text.startswith("/pause"):
             SCANNING=False; bot.send_message(m.chat.id,"⏸️ Paused")
         elif m.text.startswith("/test") or m.text.startswith("/scan"):
@@ -756,7 +805,7 @@ if bot:
                 InlineKeyboardButton(f"🚀 BOTH", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}_{payout}"),
                 InlineKeyboardButton("❌ Skip", callback_data="skip")
             )
-            txt=f"{label} 100/100\n\n{pair} {d} {c}% Payout {payout}% M1 ✅\nPrice {price}\nRSI {rsi} {ema}\n\n👇 Where to send?"
+            txt=f"{label} 100/100 MARTINGALE ${get_martingale_amount()} Lvl{martingale_level+1}\n\n{pair} {d} {c}% Payout {payout}% M1 ✅\nPrice {price}\nRSI {rsi} {ema}\n\n👇 Where to send?"
             bot.send_message(m.chat.id, txt, reply_markup=mk)
 
     @bot.callback_query_handler(func=lambda c: True)
@@ -771,6 +820,18 @@ if bot:
             full = build_full_text(pair,d,c,rsi,ema,price,f"RSI {rsi} + {ema} + SR + M1 GOD MODE",payout)
             sent_users=0; sent_chan=False
             chart_path = generate_chart(pair)
+
+            # AUTO TRADE LOGIC ON BUTTON CLICK
+            if AUTO_TRADE_ENABLED and int(c) >= AUTO_MIN_CONFIDENCE and IQ_CONNECTED:
+                amt = get_martingale_amount()
+                dir_iq = "call" if d=="CALL" else "put"
+                ok, oid = iq_auto_trade(pair, dir_iq, amt, 5)
+                if ok:
+                    full += f"\n\n🤖 AUTO TRADE PLACED!\n💰 ${amt} Lvl{martingale_level+1} ID:{oid}\nMode:{AUTO_TRADE_BALANCE} 1-2-4"
+                    threading.Thread(target=track_martingale_result, args=(oid, amt, pair), daemon=True).start()
+                else:
+                    full += f"\n\n⚠️ Auto fail: {oid}"
+
             if typ in ["users","both"]:
                 all_ids = set(list(PAID_USERS.keys()) + list(FREE_USERS.keys()) + [str(OWNER_ID)])
                 for uid_str in all_ids:
@@ -798,7 +859,7 @@ if bot:
             save_json(HISTORY_FILE, PRICE_HISTORY)
             threading.Thread(target=check_win_loss, args=(pair,d,float(price)), daemon=True).start()
             where = "USERS" if typ=="users" else "CHANNEL" if typ=="chan" else "BOTH"
-            bot.edit_message_text(f"✅ V33 100/100 SENT: {where}\n👥 {sent_users} | 📢 {'Yes' if sent_chan else 'No'} | Payout {payout}% | M1 ✅ | IQ {IQ_CONNECTED}", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(f"✅ SENT: {where}\n👥 {sent_users} | 📢 {'Yes' if sent_chan else 'No'} | Payout {payout}% | Stake ${get_martingale_amount()} Lvl{martingale_level+1} | IQ {IQ_CONNECTED}", call.message.chat.id, call.message.message_id)
         except Exception as e:
             bot.send_message(call.message.chat.id, f"Error {e}")
 
@@ -808,7 +869,7 @@ if bot:
             js=request.get_data().decode('utf-8'); upd=telebot.types.Update.de_json(js); bot.process_new_updates([upd]); return ''
         return 'ok',200
     @app.route('/')
-    def home(): return "V33 100/100 ULTIMATE LIVE - 5 MIN + M1 + IQ",200
+    def home(): return "V33 100/100 + AUTO 90% + MARTINGALE 1-2-4 LIVE",200
 
     def set_wh():
         time.sleep(5)
@@ -828,7 +889,7 @@ def scanner():
             if is_news_time(): continue
             if time.time() - LAST_SIGNAL_TIME > 7200:
                 try:
-                    ping = f"✅ V33 100/100 ULTIMATE ACTIVE ✅\nM1 + IQ Live + Sweep + Payout + Backtest\nUse /chart | /payout | /sweep | /backtest"
+                    ping = f"✅ V33 100/100 + AUTO 90% + MARTINGALE 1-2-4 ACTIVE\nStake ${get_martingale_amount()} Lvl{martingale_level+1} Profit ${auto_stats['profit']:.2f}\nUse /chart | /payout | /martingale"
                     bot.send_message(CHANNEL_ID, ping)
                     LAST_SIGNAL_TIME = time.time()
                 except Exception as e: print(f"ping err {e}")
@@ -841,11 +902,11 @@ def scanner():
                 mk.add(
                     InlineKeyboardButton(f"👥 Users Only", callback_data=f"users_{pair}_{d}_{c}_{rsi}_{ema}_{price}_{payout}"),
                     InlineKeyboardButton(f"📢 Channel Only", callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{ema}_{price}_{payout}"),
-                    InlineKeyboardButton(f"🚀 BOTH", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}_{payout}"),
+                    InlineKeyboardButton(f"🚀 BOTH (AUTO ${get_martingale_amount()})", callback_data=f"both_{pair}_{d}_{c}_{rsi}_{ema}_{price}_{payout}"),
                     InlineKeyboardButton("❌ Skip", callback_data="skip")
                 )
                 sess,_=get_session()
-                txt=f"🔔 V33 100/100 READY!\n\n{pair} {d} {c}% Payout {payout}% M1 ✅\nPrice {price}\nRSI {rsi} EMA {ema}\n{reason}\n{sess}\n100/100 ULTIMATE ✅"
+                txt=f"🔔 V33 100/100 READY! Martingale ${get_martingale_amount()} Lvl{martingale_level+1}\n\n{pair} {d} {c}% Payout {payout}% M1 ✅\nPrice {price}\nRSI {rsi} EMA {ema}\n{reason}\n{sess}\n🤖 Auto will trade ${get_martingale_amount()} on SEND"
                 bot.send_message(OWNER_ID, txt, reply_markup=mk)
                 LAST_SIGNAL_TIME = time.time()
                 time.sleep(120)
