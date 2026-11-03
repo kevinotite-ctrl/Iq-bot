@@ -18,7 +18,7 @@ except:
     HAS_PD = False
     pd = None
 
-print("=== V32 FINAL IQ+OTC+MOMENTUM+ENTRY+EXPIRY ===", flush=True)
+print("=== V33 FINAL IQ FIX + 40s BUFFER ===", flush=True)
 app = Flask(__name__)
 
 TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
@@ -56,36 +56,53 @@ iq = None
 IQ_CONNECTED = False
 IQ_LOCK = threading.Lock()
 BALANCE = 0
+BUFFER_SEC = 40  # Time to enter IQ
 
 def init_iq():
     global iq, IQ_CONNECTED, BALANCE
-    if not IQ_EMAIL or not IQ_PASS: return
+    if not IQ_EMAIL or not IQ_PASS:
+        print("IQ credentials missing", flush=True)
+        return
     try:
         from iqoptionapi.stable_api import IQ_Option
         logging.disable(logging.CRITICAL)
-        iq = IQ_Option(IQ_EMAIL, IQ_PASS)
-        iq.connect()
-        IQ_CONNECTED = iq.check_connect()
+        iq_obj = IQ_Option(IQ_EMAIL, IQ_PASS)
+        check = iq_obj.connect()
+        connected = iq_obj.check_connect() if hasattr(iq_obj, 'check_connect') else check
+        iq = iq_obj if connected else None
+        IQ_CONNECTED = bool(connected)
         if IQ_CONNECTED:
             try: BALANCE = iq.get_balance()
-            except: pass
+            except: BALANCE = 0
         logging.disable(logging.NOTSET); logging.disable(logging.ERROR)
         print(f"IQ Connected {IQ_CONNECTED} Bal {BALANCE}", flush=True)
-    except Exception as e: print(f"IQ Fail {e}", flush=True)
+    except Exception as e:
+        iq = None
+        IQ_CONNECTED = False
+        print(f"IQ Fail {e}", flush=True)
 
 threading.Thread(target=init_iq, daemon=True).start()
 
 def iq_reconnect():
-    global iq, IQ_CONNECTED
+    global iq, IQ_CONNECTED, BALANCE
     try:
         from iqoptionapi.stable_api import IQ_Option
         logging.disable(logging.CRITICAL)
-        iq = IQ_Option(IQ_EMAIL, IQ_PASS)
-        iq.connect()
-        IQ_CONNECTED = iq.check_connect()
+        iq_obj = IQ_Option(IQ_EMAIL, IQ_PASS)
+        iq_obj.connect()
+        connected = iq_obj.check_connect()
+        iq = iq_obj if connected else None
+        IQ_CONNECTED = bool(connected)
+        if IQ_CONNECTED:
+            try: BALANCE = iq.get_balance()
+            except: pass
         logging.disable(logging.NOTSET); logging.disable(logging.ERROR)
         return IQ_CONNECTED
-    except: return False
+    except Exception as e:
+        print(f"IQ reconnect fail {e}", flush=True)
+        iq = None
+        IQ_CONNECTED = False
+        return False
 
 def is_otc_time():
     now = datetime.datetime.now() + datetime.timedelta(hours=1)
@@ -95,13 +112,17 @@ def get_active_symbol(base):
     return OTC_MAP.get(base, base) if is_otc_time() else base
 
 def get_iq_candles(base, count=100):
-    if not IQ_CONNECTED and not iq_reconnect(): return None, base
+    global iq, IQ_CONNECTED
+    if iq is None or not IQ_CONNECTED:
+        if not iq_reconnect():
+            return None, base
     active = get_active_symbol(base)
     try_list = list(dict.fromkeys([active, base, OTC_MAP.get(base,"")]))
     try_list = [x for x in try_list if x]
     for sym in try_list:
         try:
             with IQ_LOCK:
+                if iq is None: continue
                 logging.disable(logging.CRITICAL)
                 candles = iq.get_candles(sym, 60, count, time.time())
                 logging.disable(logging.NOTSET); logging.disable(logging.ERROR)
@@ -109,7 +130,9 @@ def get_iq_candles(base, count=100):
                 candles=sorted(candles,key=lambda x:x['from'])
                 PRICE_CACHE[f"{base}_SYMBOL"]=sym
                 return candles, sym
-        except: continue
+        except Exception as e:
+            print(f"candle err {sym} {e}", flush=True)
+            continue
     return None, base
 
 def get_price(base):
@@ -132,8 +155,7 @@ def get_candles_df(pair):
         candles = PRICE_HISTORY[full_key]
         if HAS_PD:
             df = pd.DataFrame(candles)
-            if 'close' in df.columns:
-                return df
+            if 'close' in df.columns: return df
     if base in PRICE_HISTORY and len(PRICE_HISTORY[base])>=50:
         closes = PRICE_HISTORY[base]
         if HAS_PD:
@@ -154,11 +176,6 @@ def calc_rsi_pandas(close_series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def calc_rsi(close_list, period=14):
-    if HAS_PD and hasattr(close_list, 'ewm'):
-        return calc_rsi_pandas(close_list, period)
-    return 50
-
 def calc_atr(df, period=14):
     try:
         if not HAS_PD: return 0.0004
@@ -174,6 +191,8 @@ def calc_atr(df, period=14):
     except: return 0.0004
 
 def get_payout(pair):
+    global iq, IQ_CONNECTED
+    if iq is None or not IQ_CONNECTED: return 80
     try:
         with IQ_LOCK:
             logging.disable(logging.CRITICAL)
@@ -190,7 +209,7 @@ def analyze_momentum(pair, sniper_mode=False):
         if not HAS_PD: return None
         close=df['close']; open_=df['open']; high=df['max'] if 'max' in df.columns else df['high']; low=df['min'] if 'min' in df.columns else df['low']
         ema9=close.ewm(span=9, adjust=False).mean(); ema21=close.ewm(span=21, adjust=False).mean(); ema50=close.ewm(span=50, adjust=False).mean()
-        rsi_fast=calc_rsi(close,7); rsi_slow=calc_rsi(close,14)
+        rsi_fast=calc_rsi_pandas(close,7); rsi_slow=calc_rsi_pandas(close,14)
         atr=calc_atr(df,14)
         c_now=float(close.iloc[-1]); o_now=float(open_.iloc[-1])
         c_prev=float(close.iloc[-2]); o_prev=float(open_.iloc[-2])
@@ -200,19 +219,18 @@ def analyze_momentum(pair, sniper_mode=False):
         mom1=(close.iloc[-1]-close.iloc[-2])/close.iloc[-2]*100
         mom3=(close.iloc[-1]-close.iloc[-4])/close.iloc[-4]*100
         body=abs(c_now-o_now)
-        upper_wick=h_now-max(c_now,o_now)
-        lower_wick=min(c_now,o_now)-l_now
+        upper_wick=h_now-max(c_now,o_now); lower_wick=min(c_now,o_now)-l_now
         is_green=c_now>o_now
         payout=get_payout(pair)
         sig="CALL" if is_green else "PUT"
         score=0; reason_list=[]
         min_atr = 0.00025 if pair.replace("-OTC","") in ["EURUSD","GBPUSD","USDJPY"] else 0.00035
         if atr < min_atr:
-            return {"pair":pair,"dir":sig,"conf":45,"price":c_now,"rsi":rsi7,"reason":"Low ATR - Choppy","payout":payout,"expiry":120,"atr":atr,"rejected":False}
+            return {"pair":pair,"dir":sig,"conf":45,"price":c_now,"rsi":rsi7,"reason":"Low ATR","payout":payout,"expiry":120,"atr":atr,"rejected":False}
         if body < atr*0.35:
-            return {"pair":pair,"dir":sig,"conf":50,"price":c_now,"rsi":rsi7,"reason":"Doji - No body","payout":payout,"expiry":120,"atr":atr,"rejected":False}
+            return {"pair":pair,"dir":sig,"conf":50,"price":c_now,"rsi":rsi7,"reason":"Doji","payout":payout,"expiry":120,"atr":atr,"rejected":False}
         if upper_wick > body*2.5 and lower_wick > body*2.5:
-            return {"pair":pair,"dir":sig,"conf":48,"price":c_now,"rsi":rsi7,"reason":"High indecision","payout":payout,"expiry":120,"atr":atr,"rejected":False}
+            return {"pair":pair,"dir":sig,"conf":48,"price":c_now,"rsi":rsi7,"reason":"Indecision","payout":payout,"expiry":120,"atr":atr,"rejected":False}
         if is_green:
             if e9 > e21 and e21 > e50: score+=20; reason_list.append("EMA Bull Align")
             elif e9 > e21: score+=12
@@ -242,11 +260,9 @@ def analyze_momentum(pair, sniper_mode=False):
         if is_green:
             if bullish_engulf: score+=15; reason_list.append("Bull Engulf")
             if pin_bull: score+=15; reason_list.append("Pin Bar Bull")
-            elif lower_wick > upper_wick: score+=8
         else:
             if bearish_engulf: score+=15; reason_list.append("Bear Engulf")
             if pin_bear: score+=15; reason_list.append("Pin Bar Bear")
-            elif upper_wick > lower_wick: score+=8
         score = max(45, min(94, score + 30))
         reason = " + ".join(reason_list) if reason_list else "Weak PA"
         expiry = 180 if abs(mom1) > 0.06 else 120
@@ -290,7 +306,7 @@ def analyze_real(pair):
     price, used_sym = get_price(pair)
     prices = PRICE_HISTORY.get(pair, [])
     if len(prices)<40: return None
-    rsi=calc_rsi_simple(prices); ema9=calc_ema_simple(prices,9); ema21=calc_ema_simple(prices,21)
+    rsi=calc_rsi_simple(prices); ema9=calc_ema_simple(prices,9)
     upper,middle,lower=calc_bollinger(prices,20,2)
     support,resistance=find_sr_levels(prices,40)
     if not upper or not support: return None
@@ -365,19 +381,16 @@ def get_expiry_date(uid): return datetime.datetime.fromtimestamp(PAID_USERS[str(
 
 def build_full_text(pair,d,c,rsi,reason,price,used_sym, expiry=180, payout=80, atr=0):
     now=datetime.datetime.now()+datetime.timedelta(hours=1)
-    exp=now+datetime.timedelta(seconds=expiry)
+    entry = now + datetime.timedelta(seconds=BUFFER_SEC)
+    exp = entry + datetime.timedelta(seconds=expiry)
     icon="🔺" if d=="CALL" else "🔻"
     otc_tag="🌙 OTC NIGHT/WEEKEND" if "OTC" in used_sym else "☀️ REAL MARKET"
     strat_tag = "⚡ MOMENTUM" if "EMA" in reason or "Mom" in reason or "Engulf" in reason or "Pin" in reason else "🏔️ SR+BB"
-    if expiry <= 60:
-        exp_reason = "1 MIN - Fast momentum OTC"
-    elif expiry <= 120:
-        exp_reason = "2 MIN - Standard momentum"
-    else:
-        exp_reason = "3 MIN - SR bounce needs time" if "SUP" in reason or "RES" in reason or "BB" in reason else "3 MIN - Strong trend continuation"
+    if expiry <= 60: exp_reason = "1 MIN - Fast momentum OTC"
+    elif expiry <= 120: exp_reason = "2 MIN - Standard momentum"
+    else: exp_reason = "3 MIN - SR bounce needs time" if "SUP" in reason or "RES" in reason or "BB" in reason else "3 MIN - Strong trend"
     mins = expiry // 60
-    secs = expiry
-    return f"""🚨 V31 {otc_tag} {strat_tag} 🚨
+    return f"""🚨 V33 {otc_tag} {strat_tag} 🚨
 
 💱 {pair} → {used_sym}
 {'📈' if d=='CALL' else '📉'} {d} - {mins} MIN {icon}
@@ -385,11 +398,17 @@ def build_full_text(pair,d,c,rsi,reason,price,used_sym, expiry=180, payout=80, a
 💲 {price} | RSI {round(float(rsi),1)} | ATR {round(float(atr),5)} | Pay {payout}%
 📡 IQ: {"✅ REAL" if IQ_CONNECTED else "❌"}
 
-🎯 ENTRY: {now.strftime('%H:%M:%S')} WAT
-⏰ EXPIRY: {exp.strftime('%H:%M:%S')} WAT ({secs}s)
+🎯 ENTRY: {entry.strftime('%H:%M:%S')} WAT (in {BUFFER_SEC}s)
+⏰ EXPIRY: {exp.strftime('%H:%M:%S')} WAT ({expiry}s)
 ⏳ SUGGESTED: {exp_reason}
 
-👉 Trade {d} NOW on {used_sym}!"""
+👉 You have {BUFFER_SEC}s to place {d} on {used_sym}!"""
+
+def scanner_text(pair, used_sym, d, c, price, rsi, reason, payout, atr, expiry):
+    now=datetime.datetime.now()+datetime.timedelta(hours=1)
+    entry = now + datetime.timedelta(seconds=BUFFER_SEC)
+    exp = entry + datetime.timedelta(seconds=expiry)
+    return f"🔔 V33 READY!\n{pair}→{used_sym} {d} {c}% Price {price} RSI {round(float(rsi),1)}\n{reason}\nPay {payout}% ATR {round(float(atr),5)}\n🎯 ENTRY {entry.strftime('%H:%M:%S')} (in {BUFFER_SEC}s) → ⏰ EXP {exp.strftime('%H:%M:%S')} ({expiry}s)\n{'🌙 OTC' if 'OTC' in used_sym else '☀️ REAL'}"
 
 bot = telebot.TeleBot(TOKEN, threaded=False) if ':' in TOKEN else None
 
@@ -400,10 +419,10 @@ if bot:
         if OWNER_ID is None: OWNER_ID=m.chat.id
         mode="🌙 OTC" if is_otc_time() else "☀️ REAL"
         if OWNER_ID and m.chat.id==OWNER_ID:
-            bot.send_message(m.chat.id,f"👑 V31 OWNER {mode} IQ:{'✅' if IQ_CONNECTED else '❌'}\nDual Engine: SR+BB + MOMENTUM\n/resume /pause /test /status /levels /balance\n/chart EURUSD")
+            bot.send_message(m.chat.id,f"👑 V33 OWNER {mode} IQ:{'✅' if IQ_CONNECTED else '❌'}\nDual Engine: SR+BB + MOMENTUM + {BUFFER_SEC}s buffer\n/resume /pause /test /status /levels /balance\n/chart EURUSD")
             return
         left=2-FREE_USERS.get(str(m.chat.id),0)
-        bot.send_message(m.chat.id,f"🚀 V31 IQ+OTC+Momentum\n{mode}\n{left} free left")
+        bot.send_message(m.chat.id,f"🚀 V33 IQ+OTC+Momentum\n{mode}\n{left} free left")
 
     @bot.message_handler(commands=['chart'])
     def chart_cmd(m):
@@ -424,30 +443,38 @@ if bot:
 
     @bot.message_handler(commands=['levels','balance','status','id','pause','resume','test','scan'])
     def other(m):
-        global SCANNING,OWNER_ID,LAST_SIGNAL_TIME,BALANCE
+        global SCANNING,OWNER_ID,LAST_SIGNAL_TIME,BALANCE, iq, IQ_CONNECTED
         if m.text.startswith("/id"):
-            bot.send_message(m.chat.id,f"ID {m.from_user.id} Owner {OWNER_ID} OTC {is_otc_time()} IQ {IQ_CONNECTED} Sym {PRICE_CACHE.get('EURUSD_SYMBOL','?')}"); return
+            bot.send_message(m.chat.id,f"ID {m.from_user.id} Owner {OWNER_ID} OTC {is_otc_time()} IQ {IQ_CONNECTED} Sym {PRICE_CACHE.get('EURUSD_SYMBOL','?')} iq_obj {iq is not None}"); return
         if m.text.startswith("/balance"):
             if OWNER_ID and m.chat.id!=OWNER_ID: return
             try:
+                if iq is None or not IQ_CONNECTED:
+                    bot.send_message(m.chat.id, "⏳ IQ not connected, reconnecting...")
+                    if not iq_reconnect():
+                        bot.send_message(m.chat.id, f"❌ IQ not connected. Check IQ_EMAIL/IQ_PASS in Render. IQ_CONNECTED={IQ_CONNECTED}")
+                        return
                 with IQ_LOCK:
+                    if iq is None:
+                        raise Exception("IQ object is None after reconnect")
                     logging.disable(logging.CRITICAL)
                     bal = iq.get_balance()
-                    mode = iq.get_balance_mode()
+                    try: mode = iq.get_balance_mode()
+                    except: mode = "UNKNOWN"
                     logging.disable(logging.NOTSET); logging.disable(logging.ERROR)
                 BALANCE = bal
                 bot.send_message(m.chat.id, f"💰 IQ Balance\nMode: {mode}\nBal: ${bal}\nIQ: {'✅' if IQ_CONNECTED else '❌'}")
             except Exception as e:
-                bot.send_message(m.chat.id, f"❌ {e} IQ:{IQ_CONNECTED}")
+                bot.send_message(m.chat.id, f"❌ Balance error: {e} IQ:{IQ_CONNECTED} iq_obj:{iq is not None}")
             return
         if OWNER_ID and m.chat.id!=OWNER_ID: return
         if m.text.startswith("/status"):
-            txt=f"OTC: {is_otc_time()} {'🌙' if is_otc_time() else '☀️'} IQ {IQ_CONNECTED} SCAN {SCANNING}\n"
+            txt=f"OTC: {is_otc_time()} {'🌙' if is_otc_time() else '☀️'} IQ {IQ_CONNECTED} iq_obj {iq is not None} SCAN {SCANNING}\n"
             for p in PAIRS: txt+=f"{p}: {len(PRICE_HISTORY.get(p,[]))} Sym {PRICE_CACHE.get(f'{p}_SYMBOL','?')}\n"
             bot.send_message(m.chat.id, txt)
         elif m.text.startswith("/levels"):
             mode="🌙 OTC" if is_otc_time() else "☀️ REAL"
-            txt=f"📊 V31 LEVELS {mode} IQ:{'✅' if IQ_CONNECTED else '❌'}\n━━━━━━━━━━━━━━━\n"
+            txt=f"📊 V33 LEVELS {mode} IQ:{'✅' if IQ_CONNECTED else '❌'}\n━━━━━━━━━━━━━━━\n"
             for pair in PAIRS:
                 prices=PRICE_HISTORY.get(pair,[])
                 if len(prices)<40: txt+=f"⏳ {pair}: {len(prices)}/40\n"; continue
@@ -479,7 +506,7 @@ if bot:
                    InlineKeyboardButton(f"📢 Channel {sym}",callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{reason}_{price}_{expiry}_{payout}_{atr}"),
                    InlineKeyboardButton(f"🚀 BOTH {sym} {expiry}s",callback_data=f"both_{pair}_{d}_{c}_{rsi}_{reason}_{price}_{expiry}_{payout}_{atr}"),
                    InlineKeyboardButton("❌ Skip",callback_data="skip"))
-            bot.send_message(m.chat.id,f"TEST {pair}→{sym} {d} {c}%\n{reason}\n🎯 Entry now + {expiry}s expiry\nPay {payout}% ATR {round(atr,5)}\nWhere?",reply_markup=mk)
+            bot.send_message(m.chat.id,f"TEST {pair}→{sym} {d} {c}%\n{reason}\n🎯 Entry in {BUFFER_SEC}s + {expiry}s expiry\nPay {payout}% ATR {round(atr,5)}\nWhere?",reply_markup=mk)
 
     @bot.callback_query_handler(func=lambda c: True)
     def cb(call):
@@ -512,7 +539,7 @@ if bot:
                     else: bot.send_message(CHANNEL_ID,full)
                 except: pass
             LAST_SIGNAL_TIME=time.time()
-            bot.edit_message_text(f"✅ SENT {used_sym} {typ} {d} {c}% Exp {expiry}s",call.message.chat.id,call.message.message_id)
+            bot.edit_message_text(f"✅ SENT {used_sym} {typ} {d} {c}% Exp {expiry}s +{BUFFER_SEC}s buffer",call.message.chat.id,call.message.message_id)
         except Exception as e: bot.send_message(call.message.chat.id,f"Error {e}")
 
     @app.route(f'/{TOKEN}',methods=['POST'])
@@ -521,7 +548,7 @@ if bot:
             js=request.get_data().decode('utf-8'); upd=telebot.types.Update.de_json(js); bot.process_new_updates([upd]); return ''
         return 'ok',200
     @app.route('/')
-    def home(): return f"V32 FINAL IQ:{IQ_CONNECTED} OTC:{is_otc_time()} Sym:{PRICE_CACHE.get('EURUSD_SYMBOL','?')}",200
+    def home(): return f"V33 FIX IQ:{IQ_CONNECTED} iq_obj:{iq is not None} OTC:{is_otc_time()} Sym:{PRICE_CACHE.get('EURUSD_SYMBOL','?')} Buffer:{BUFFER_SEC}s",200
 
     def set_wh():
         time.sleep(5)
@@ -544,17 +571,10 @@ def scanner():
                 if sr: candidates.append(sr)
                 if mom and not mom.get('rejected', False) and mom['conf']>=70:
                     candidates.append({
-                        "pair": pair,
-                        "dir": mom['dir'],
-                        "conf": mom['conf'],
-                        "rsi": mom['rsi'],
-                        "reason": mom['reason'],
-                        "price": mom['price'],
-                        "used": sym,
-                        "type": "MOM",
-                        "expiry": mom['expiry'],
-                        "payout": mom['payout'],
-                        "atr": mom['atr']
+                        "pair": pair, "dir": mom['dir'], "conf": mom['conf'],
+                        "rsi": mom['rsi'], "reason": mom['reason'], "price": mom['price'],
+                        "used": sym, "type": "MOM", "expiry": mom['expiry'],
+                        "payout": mom['payout'], "atr": mom['atr']
                     })
                 if not candidates: continue
                 best = max(candidates, key=lambda x: x['conf'])
@@ -566,9 +586,7 @@ def scanner():
                        InlineKeyboardButton(f"📢 Channel {used_sym}",callback_data=f"chan_{pair}_{d}_{c}_{rsi}_{reason}_{price}_{expiry}_{payout}_{atr}"),
                        InlineKeyboardButton(f"🚀 BOTH {used_sym} {strat_icon} Exp {expiry}s",callback_data=f"both_{pair}_{d}_{c}_{rsi}_{reason}_{price}_{expiry}_{payout}_{atr}"),
                        InlineKeyboardButton("❌ Skip",callback_data="skip"))
-                now=datetime.datetime.now()+datetime.timedelta(hours=1)
-                exp=now+datetime.timedelta(seconds=expiry)
-                txt=f"🔔 V32 {strat_icon} READY!\n{pair}→{used_sym} {d} {c}% Price {price} RSI {round(float(rsi),1)}\n{reason}\nPay {payout}% ATR {round(float(atr),5)}\n🎯 ENTRY {now.strftime('%H:%M:%S')} → ⏰ EXPIRY {exp.strftime('%H:%M:%S')} ({expiry}s)\n{'🌙 OTC' if 'OTC' in used_sym else '☀️ REAL'}"
+                txt=scanner_text(pair, used_sym, d, c, price, rsi, reason, payout, atr, expiry)
                 bot.send_message(OWNER_ID,txt,reply_markup=mk)
                 LAST_SIGNAL_TIME=time.time()
                 time.sleep(120)
