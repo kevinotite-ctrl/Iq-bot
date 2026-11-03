@@ -4,4 +4,5 @@ yfinance
 matplotlib
 pandas
 requests
+pytz
 git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
