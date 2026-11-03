@@ -1,8 +1,8 @@
+pytz
 pyTelegramBotAPI
 Flask
-yfinance
-matplotlib
-pandas
 requests
+pandas
+matplotlib
 pytz
 git+https://github.com/Lu-Yi-Hsun/iqoptionapi.git
