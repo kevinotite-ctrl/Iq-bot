@@ -478,4 +478,4 @@ def scanner():
                 break
         except Exception as e: print(f"SCAN {e}", flush=True); time.sleep(10)
 threading.Thread(target=scanner, daemon=True).start()
-if __name__=="__main__": app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)
+if __name__=="__main__": app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
